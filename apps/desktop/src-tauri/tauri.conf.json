@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Software Factory",
+  "version": "0.1.0",
+  "identifier": "dev.guyhazut.softwarefactory",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build && node scripts/prepare-resources.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "Software Factory", "width": 1360, "height": 860, "minWidth": 980, "minHeight": 620 }],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi", "dmg", "app", "deb", "appimage"],
+    "category": "DeveloperTool",
+    "shortDescription": "AI coding agents in isolated sandboxes, driven by GitHub",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["binaries/sf-node"],
+    "resources": { "resources/orchestrator.mjs": "resources/orchestrator.mjs", "resources/skills": "resources/skills" }
+  }
+}

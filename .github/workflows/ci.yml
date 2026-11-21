@@ -17,3 +17,5 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      - run: pnpm --filter @sf/orchestrator build
+      - run: pnpm --filter @sf/desktop build

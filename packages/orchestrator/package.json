@@ -1,9 +1,15 @@
 {
   "name": "@sf/orchestrator",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "scripts": { "typecheck": "tsc -p .", "test": "vitest run", "start": "node --experimental-strip-types src/main.ts" },
-  "dependencies": { "@sf/adapters": "workspace:*", "@sf/db": "workspace:*" }
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "build": "node build.mjs",
+    "start": "node --experimental-sqlite src/main.ts"
+  },
+  "dependencies": { "@sf/adapters": "workspace:*", "ws": "^8.18.0" },
+  "devDependencies": { "@types/ws": "^8.5.13", "esbuild": "^0.24.0" }
 }

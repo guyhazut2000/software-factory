@@ -1,0 +1,9 @@
+{
+  "name": "@sf/orchestrator",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "typecheck": "tsc -p .", "test": "vitest run", "start": "node --experimental-strip-types src/main.ts" },
+  "dependencies": { "@sf/adapters": "workspace:*", "@sf/db": "workspace:*" }
+}

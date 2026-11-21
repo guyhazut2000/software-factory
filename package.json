@@ -1,0 +1,19 @@
+{
+  "name": "software-factory",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "eslint": "^9.15.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.15.0",
+    "vitest": "^2.1.5",
+    "@types/node": "^22.9.0"
+  }
+}

@@ -94,23 +94,32 @@ name, role, description (system prompt), provider (`claude-code|codex|cursor`), 
 ```ts
 interface ProviderAdapter {
   id: "claude-code" | "codex" | "cursor";
-  buildCommand(spec: AgentRunSpec): string[];   // non-interactive, JSON output
-  parseLine(line: string): AgentEvent[];        // text | tool_call | usage | request_restart | ask_guy | done
+  executables: string[];                 // claude | codex | cursor-agent, agent
+  sbxAgent: string;                      // agent name for `sbx create`
+  buildCommand(spec: AgentRunSpec): { argv: string[]; stdin?: string; files?: Record<string,string> };
+  parseLine(line: string): AgentEvent[]; // text | tool_call | usage | cost | done
 }
 ```
-Commands: `claude -p "<prompt>" --output-format stream-json --verbose --model <m>`; `codex exec --json "<prompt>"`; `cursor-agent -p "<prompt>" --output-format stream-json`. Verify flags against installed versions in phase 1. `ask_guy` and `request_restart` reach the orchestrator through small tools exposed to the agent (an MCP server or CLI shim in the sandbox) that write to the orchestrator.
+The prompt goes through stdin where the CLI supports it (no shell quoting or argv length issues on Windows).
+
+| Provider | Command built | Flags verified in official docs | Still unverified |
+|---|---|---|---|
+| Claude Code | `claude -p --output-format stream-json --verbose --model M --effort E --append-system-prompt S --mcp-config F --settings F --max-turns N --permission-mode bypassPermissions` (sandboxed) / `acceptEdits --allowedTools ...` (host) / `--allowedTools "mcp__factory Read Glob Grep"` (read-only) | all flags (docs.claude.com CLI reference) | exact `stream-json` event shapes on a live run; `--effort` accepted values per model |
+| Codex | `codex exec --json --skip-git-repo-check -m M -s <sandbox> -c model_reasoning_effort="E" -C DIR [-c mcp_servers.factory.url="..."] -` | `exec`, `--json`, `-m`, `-s`, `-c`, `-C`, `--skip-git-repo-check` (developers.openai.com/codex/cli/reference) | JSONL event schema; `mcp_servers.<name>.url` config key; `-` for stdin |
+| Cursor Agent | `cursor-agent -p --output-format stream-json --trust --approve-mcps --model M --workspace DIR (--force \| --mode ask) PROMPT`; MCP via `.cursor/mcp.json` | `-p`, `--output-format`, `--force`, `--trust`, `--approve-mcps`, `--model`, `--workspace`, `--mode ask` (cursor.com/docs/cli/reference/parameters) | event schema; binary name (`cursor-agent` vs `agent`: both are tried); usage reporting |
 
 ## 7. Sandbox integration (`sbx`)
-Wrapped by a `SandboxDriver` interface. Exact flow (verify flags against `sbx --help` for the installed version):
+Wrapped in `workspace.ts` behind a `Workspace` interface with two implementations (sbx and host git worktree). Commands used (verified in docs.docker.com/ai/sandboxes/usage):
 ```
-sbx login
-sbx secret set github                       # token stays outside agent
-sbx run claude --name sf-<agent>-<task> <repo-path-or-clone>   # clone mode: private repo clone per agent
-sbx ls
-sbx stop sf-<agent>-<task>
-sbx rm sf-<agent>-<task>
+sbx policy init balanced                     # once; Setup tab button also allows github.com, api.anthropic.com, api.openai.com, api2.cursor.sh, registry.npmjs.org
+sbx secret set github --command 'gh auth token'   # once, by Guy
+sbx create --clone --name sf-<task8> <agent> <host-base-clone>   # private in-sandbox clone
+sbx exec [-e K=V ...] sf-<task8> <cmd...>    # run the provider CLI / git inside (foreground)
+sbx stop sf-<task8>; sbx rm --force sf-<task8>
 ```
-Network policy: deny by default; allow `github.com`, `api.github.com`, and the provider host (`api.anthropic.com`, `api.openai.com`, Cursor API). CPU/RAM from agent profile. Agents may start their own dev servers and containers using the sandbox's private Docker engine, which cannot touch the host.
+Flow per task: host base clone is refreshed, `sbx create --clone`, `origin` is pointed at GitHub, task branch checked out, files (hook script, MCP config, skills) written with `sbx exec ... base64 -d`, provider CLI runs through `sbx exec`, then the orchestrator runs `git push` inside the sandbox and opens the PR through the GitHub API on the host.
+
+**Unverified (needs a real sbx install):** whether the in-sandbox working directory equals the `sbx exec` default cwd (assumed), CPU/RAM flags (agent `cpu`/`ram_mb` are stored but not yet passed to sbx), whether `host.docker.internal` reaches the orchestrator from the microVM (configurable in Settings), whether `sbx secret set github` makes `git push` work inside the sandbox, and the exact agent names accepted by `sbx create` for Codex and Cursor.
 
 ## 8. GitOps flow
 - Labels: `sf:ready` (to be picked up), `sf:working`, `sf:review`, `sf:blocked` (waiting for Guy), plus skill tags.
@@ -154,3 +163,16 @@ Kanban (queued / working / waiting for Guy / in review / done); agent cards (sta
 - Polling vs. a tunnel for webhooks.
 - Auth for subscriptions inside sandboxes (login persisted vs. API keys).
 - Machine size: how many concurrent sandboxes Guy's machine handles.
+
+## 15. Implementation status (v0.1.0)
+Working end to end (verified with a scripted fake provider CLI against real GitHub: Issue -> branch -> PR -> reviewer comment -> ready to merge): task intake from `status:ready` Issues, assignment, git-worktree runner, MCP factory tools (progress, task context), hooks endpoint, supervisor, scanners (skipped when tools are missing), reviewer flow, dashboard, settings, health checks.
+
+Written but not exercised against the real thing: sbx runner, real Claude/Codex/Cursor event streams, Chief chat and `ask_guy` pause/resume with a real model, desktop notifications, OS keychain on each OS, installers launching on Windows/macOS.
+
+Deviations from the original design: `node:sqlite` instead of Drizzle (ADR 4); orchestrator is a bundled Node sidecar (ADR 5); the Chief runs read-only on the host (it never edits code) and is exempt from the concurrency cap so chat stays responsive; "worktree" fallback uses git worktrees off a per-project base clone.
+
+### Efficiency layer
+- **MCP:** every agent gets the local `factory` server. GitHub and filesystem MCP are opt-in per agent because tool definitions are re-sent on every request and cost tokens.
+- **Skills:** `skills/*/SKILL.md` are copied into each workspace (`.claude/skills` for Claude Code, `.sf/skills` for others). Chief gets all; workers get role defaults plus their own tags.
+- **Hooks:** Claude Code `PreToolUse` blocks dangerous commands/paths (`guard.ts`), `PostToolUse`/`Stop` are heartbeats; git `pre-push` blocks main/master, `post-commit` heartbeats. Codex and Cursor rely on sandbox isolation + git hooks (no equivalent hook API used).
+- **Token saving:** model and effort per role (Chief strong but short-lived, Dev medium, Reviewer cheap), reviewers see only scanner findings + diff, per-agent daily budgets with auto-stop, `--max-turns` for chat/review, small stable system prompt first and task text last so provider prompt caching can reuse the prefix.

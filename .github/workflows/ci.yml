@@ -19,3 +19,35 @@ jobs:
       - run: pnpm test
       - run: pnpm --filter @sf/orchestrator build
       - run: pnpm --filter @sf/desktop build
+  start-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: pnpm start in background, then probe
+        shell: bash
+        env:
+          SF_NO_OPEN: "1"
+          SF_PORT: "47821"
+        run: |
+          pnpm start > start.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:47821/ping >/dev/null; then break; fi
+            sleep 2
+          done
+          cat start.log
+          curl -sf http://127.0.0.1:47821/ | tee index.html | grep -q "window.__SF__"
+          TOKEN=$(grep -o '"token":"[^"]*"' index.html | head -1 | cut -d'"' -f4)
+          test -n "$TOKEN"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47821/api/health)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $TOKEN" http://127.0.0.1:47821/api/health)" = "200"
+          echo "start smoke OK"

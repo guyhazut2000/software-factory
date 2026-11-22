@@ -1,4 +1,6 @@
 import http from "node:http";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import { WebSocketServer } from "ws";
 import type { Engine } from "./engine.js";
 import { handleMcp } from "./mcp.js";
@@ -21,7 +23,7 @@ async function body(req: http.IncomingMessage): Promise<J> {
   return raw ? JSON.parse(raw) : {};
 }
 
-export function startServers(engine: Engine, o: { apiPort: number; agentPort: number; token: string; agentBind: string }): Promise<{ apiPort: number; agentPort: number; close: () => void }> {
+export function startServers(engine: Engine, o: { apiPort: number; agentPort: number; token: string; agentBind: string; uiDir?: string }): Promise<{ apiPort: number; agentPort: number; close: () => void }> {
   const { db, hub } = engine;
 
   const state = () => ({
@@ -149,6 +151,21 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     throw Object.assign(new Error("not found"), { status: 404 });
   }
 
+  const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2" };
+  // Same-origin UI for `pnpm start`. The token is injected into index.html, so only serve it to loopback Host headers
+  // (blocks DNS-rebinding pages from reading it).
+  function serveUi(req: http.IncomingMessage, res: http.ServerResponse, pathname: string) {
+    const host = (req.headers.host ?? "").replace(/:\d+$/, "");
+    if (host !== "127.0.0.1" && host !== "localhost") return void res.writeHead(403).end("forbidden host");
+    const root = path.resolve(o.uiDir!);
+    let file = path.resolve(root, "." + decodeURIComponent(pathname));
+    if (!file.startsWith(root) || !existsSync(file) || statSync(file).isDirectory()) file = path.join(root, "index.html");
+    if (!existsSync(file)) return void res.writeHead(404).end("UI not built. Run: pnpm start");
+    let data: Buffer | string = readFileSync(file);
+    if (file.endsWith("index.html")) data = data.toString("utf8").replace("</head>", `<script>window.__SF__=${JSON.stringify({ token: o.token })};</script></head>`);
+    res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream", "cache-control": file.endsWith("index.html") ? "no-store" : "public, max-age=3600" }).end(data);
+  }
+
   const api = http.createServer(async (req, res) => {
     const origin = req.headers.origin ?? "";
     if (ALLOWED_ORIGINS.has(origin)) res.setHeader("access-control-allow-origin", origin);
@@ -157,6 +174,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
     const url = new URL(req.url ?? "/", "http://x");
     if (url.pathname === "/ping") return void res.writeHead(200).end("ok");
+    if (o.uiDir && req.method === "GET" && !url.pathname.startsWith("/api/") && url.pathname !== "/ws") return serveUi(req, res, url.pathname);
     if (req.headers.authorization !== `Bearer ${o.token}` && url.searchParams.get("token") !== o.token) return void res.writeHead(401).end("unauthorized");
     try {
       const out = await route(req.method ?? "GET", url, req.method === "GET" || req.method === "DELETE" ? {} : await body(req));

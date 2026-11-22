@@ -5,5 +5,5 @@ export default tseslint.config(
   { ignores: ["**/dist/**", "**/node_modules/**", "apps/desktop/src-tauri/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
-  { files: ["**/*.mjs", "**/*.js"], languageOptions: { globals: { console: "readonly", process: "readonly", fetch: "readonly", Buffer: "readonly" } } },
+  { files: ["**/*.mjs", "**/*.js"], languageOptions: { globals: { console: "readonly", process: "readonly", fetch: "readonly", Buffer: "readonly", setTimeout: "readonly", URL: "readonly" } } },
 );

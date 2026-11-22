@@ -38,8 +38,12 @@ export function App() {
       <div className="flex h-screen items-center justify-center text-muted-foreground">
         <div className="text-center">
           <div className="mb-2 text-lg font-semibold text-foreground">Software Factory</div>
-          <div>{error ? `Starting the orchestrator... (${error})` : "Connecting..."}</div>
-          <div className="mt-3 text-xs">If this never goes away, see Troubleshooting in the README.</div>
+          {error?.includes("TOKEN_MISMATCH") ? (
+            <div className="max-w-md text-danger">Token mismatch: this page and the running orchestrator disagree on the API token (often a stale orchestrator process, or a token with a trailing space). Stop every node process for Software Factory and run <code>pnpm start</code> again; do not set SF_API_TOKEN by hand.</div>
+          ) : (
+            <><div>{error ? `Starting the orchestrator... (${error})` : "Connecting..."}</div>
+            <div className="mt-3 text-xs">If this never goes away, see Troubleshooting in the README.</div></>
+          )}
         </div>
       </div>
     );

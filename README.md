@@ -4,7 +4,18 @@ A local desktop app that runs a team of AI coding agents (Claude Code, Codex, Cu
 
 Design: [docs/DESIGN.md](docs/DESIGN.md). Roadmap and open work: GitHub Issues.
 
-## Tomorrow morning quickstart
+## Run from source (any OS, cmd/PowerShell/bash)
+
+```
+git clone https://github.com/guyhazut2000/software-factory
+cd software-factory
+pnpm install
+pnpm start
+```
+
+`pnpm start` builds what is missing, starts the orchestrator on `http://127.0.0.1:47821`, and opens it in your browser. The orchestrator is the local background service that runs the agents (it drives git, `sbx` and the provider CLIs), and it serves the UI itself, so there is nothing else to start. A random access token is generated and injected automatically: never set `SF_API_TOKEN` by hand. Ctrl+C stops everything. Needs Node 22.13+ and `git`. Change the port with `SF_PORT` (cmd: `set SF_PORT=47900& pnpm start`, no space before `&`). For UI development with hot reload use `pnpm dev`.
+
+## Installer quickstart
 
 1. **Download** the installer for your OS from the [latest release](https://github.com/guyhazut2000/software-factory/releases/latest) (the repo is private: you must be signed in to GitHub).
    | OS | File |
@@ -53,6 +64,11 @@ pnpm --filter @sf/desktop tauri dev
 Release: push a tag `vX.Y.Z`; the `Release` workflow builds Windows (nsis + msi), macOS (arm64 + x64 dmg) and Linux (AppImage + deb) installers and publishes the GitHub Release.
 
 ## Troubleshooting
+
+- **"Token mismatch" or "HTTP 401" in the UI:** an old orchestrator is still running, or `SF_API_TOKEN` was set by hand (in cmd, `set A=b && cmd` stores `b ` with a trailing space). Close all node processes for Software Factory (Task Manager, or `taskkill /im node.exe /f`), unset `SF_API_TOKEN`, run `pnpm start`.
+- **"Port 47821 is already in use":** a previous run is still alive; close it or set `SF_PORT`.
+- **"Node ... is too old":** install Node 22.13 or newer (nodejs.org, or `nvm install 22`).
+- **Browser did not open:** open the URL printed in the terminal; set `SF_NO_OPEN=1` to never auto-open.
 
 - **App shows "Starting the orchestrator..." forever:** check `orchestrator.log` (macOS `~/Library/Logs/dev.guyhazut.softwarefactory/`, Linux `~/.local/share/dev.guyhazut.softwarefactory/logs/`, Windows `%LOCALAPPDATA%\dev.guyhazut.softwarefactory\logs`). Security software can block the local port or the bundled `sf-node`; allow it.
 - **Windows "VCRUNTIME"/WebView2 error:** install the [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/).

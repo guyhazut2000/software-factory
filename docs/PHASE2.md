@@ -2,7 +2,27 @@
 
 Scope (from Guy): local-only, free. One place to manage his tasks and projects: git-backed work (GitHub Issues/PRs per linked repo) AND non-git work (scripts, automations, data jobs, misc tasks). Agents work per project in an organized way. Guy talks mainly to the Chief but can talk to any agent (inbox of pending asks, threads). He can browse each project's files, see diffs of agent work, and see who is doing what, live.
 
+Revision 2: the product also doubles as an **IDE when needed** (edit files, see git diffs, commit, use terminals), and every agent gets its own settings and terminal, in the spirit of JSM HQ (section 0).
+
 This document is the audit and design only. Nothing here is built yet.
+
+## 0. Reference project: JSM HQ
+
+Guy's "JS AdQuarters" is **JSM HQ** by JavaScript Mastery: https://github.com/jsmastery-pro/jsm-hq (MIT, npm `@therealjsmastery/jsm-hq`, announced via a DEV Community post, "We Gave Our AI Coding Agents an Office"). Confidence: high (name, author, local multi-agent coding tool in Docker Sandboxes). Guy's GitHub (guyhazut2000) has no fork or copy of it, so "my project" means the one he is going to build.
+
+What it is: run inside a git repo with a GitHub remote, a lead agent plans and a team of Claude Code / Codex workers builds in isolated Docker Sandboxes, one task = one branch = one PR, shown as a pixel-art office in the browser at `127.0.0.1:7420`.
+Stack: Node >= 20 server (TypeScript, `ws` WebSocket, MCP SDK), React + Vite + Tailwind 4 front end, canvas pixel-art office, **xterm.js in the browser + `@lydell/node-pty` on the server** (prebuilt binaries, no compiler needed; tmux keeps agents alive on macOS/Linux, plain PTY on Windows), `@xterm/headless` for terminal state, loopback-only HTTP with a browser token and per-agent tokens, an `hq` MCP server for agent messaging, Claude Code hooks, GitHub polling (about every 20 s) via `gh`.
+Important finding: **it has no code editor and no diff UI** (no Monaco or CodeMirror). Review happens on GitHub. So the "edit files, see git diff, version control" part of Guy's idea is beyond HQ and is designed here from scratch.
+
+Features we copy:
+1. **Agent drawer**: click an agent to open a resizable panel with its live terminal, a shell inside its sandbox, its task, its messages and its settings (we add Files and Diff tabs).
+2. **Terminal in the top bar**: Guy's own shell in the repo, any agent's folder or a chosen folder (xterm.js + node-pty, links clickable, copy/paste rules per OS).
+3. **Per-agent settings and role file** (role text, model, sandbox CPU/RAM with "recreate sandbox").
+4. **Action items**: one list of everything waiting on Guy (questions, keys, blocked websites) with exact steps, never secret values. Our inbox (M6) adopts this, including a "request network access" ask that becomes an `sbx policy allow` rule scoped to one sandbox.
+5. **Rules that keep parallel agents sane**: the lead never writes code, one task = one branch = one PR, each task lists the files it may touch, agents ask instead of working around blocks, and HQ never merges.
+Not copied: the pixel-art office (Guy asked for a clean work-method UI), tmux persistence (possible later), npm distribution.
+
+Other candidates considered (rejected): `adrianhajdin/skild` (AI agent skills sharing site), `adrianhajdin/atelier-store` (agentic engineering demo store). Neither is an agent dashboard or IDE.
 
 ## 1. Audit of v0.1.0 against this scope
 
@@ -77,47 +97,80 @@ Table `automations`: `id, project_id, name, description, kind ('command'|'agent'
 - **Direct chat:** sending a message in a `direct` thread to an idle agent runs a one-shot turn with that agent's profile (same mechanism as the Chief chat), read-only by default. Anything that changes files must go through a task, so work stays attributable and reviewable. If the agent is busy, the message is queued as a note delivered at its next turn (`get_task_context` returns pending notes).
 - Agents still only talk to each other through the orchestrator bus (`send_message`), now visible inside threads.
 
-### 2.6 File viewer and diffs (read-only)
-API (all GET, all under the API token; nothing writes):
+### 2.6 IDE workspace per project (browse, edit, git)
+One **IDE tab** per project: file tree (left), tabbed **Monaco** editor (center), git panel and terminal (bottom/right). Monaco (MIT) is bundled locally and lazy-loaded so the app works offline and the rest of the UI stays light; the diff view uses Monaco's diff editor.
+
+**What Guy can open (the "workspace" selector at the top of the IDE):**
+1. **Main (mirror):** the orchestrator's read-only base clone of the default branch. Safe to browse; the orchestrator resets it on every sync, so editing is disabled here.
+2. **My workspace:** a separate clone per project, `~/.software-factory/ide/<project>`, that only Guy (and nobody else, no agent) touches. This is where Guy edits, commits and pushes his own branches. This split is deliberate: the existing base clone is force-reset by the orchestrator and would silently destroy edits.
+3. **An agent's workspace:** that agent's task worktree (host runner) or sbx clone (read through allowlisted `sbx exec`, or from the pushed branch). Read-only while the agent runs (see leases below).
+4. **A folder project's real directory** (M5), editable, with the same leases.
+
+**API (all under the loopback API token; JSON; paths relative to a workspace root):**
 ```
-GET /api/projects/:id/tree?path=&ref=        directory listing (name, type, size)
-GET /api/projects/:id/file?path=&ref=        text content (+ language, truncated flag); binaries return metadata only
-GET /api/projects/:id/diff?task=<id>         diff of a task's branch vs base (or local diff for folder projects)
-GET /api/projects/:id/diff?base=&head=       arbitrary refs
-GET /api/projects/:id/log?path=              recent commits touching a path
+GET  /api/ws/:wid/tree?path=              list directory
+GET  /api/ws/:wid/file?path=              text content + sha256 + language (binary: metadata only)
+PUT  /api/ws/:wid/file?path=              save; body {content, base_sha}; 409 if base_sha != current (conflict)
+POST /api/ws/:wid/fs                      {op: create|mkdir|rename|delete, path, to?}
+GET  /api/ws/:wid/git/status              branch, ahead/behind, changes (staged/unstaged/untracked)
+GET  /api/ws/:wid/git/diff?path=&staged=  or ?base=&head= / ?task=<id>; returns both sides for the Monaco diff editor
+POST /api/ws/:wid/git/stage|unstage       {paths[]}
+POST /api/ws/:wid/git/commit              {message}
+GET  /api/ws/:wid/git/branches            POST /git/checkout {branch|create}   (refuses on a dirty tree)
+POST /api/ws/:wid/git/push                pushes the current branch; never main/master (pre-push hook + API check)
+GET  /api/ws/:wid/git/log?path=           recent commits
 ```
-Safety model:
-1. Every path is resolved against the project root with `realpath`; the result must stay inside the root (blocks `..`, absolute paths, and symlinks pointing outside; symlinked entries are shown but not followed outside).
-2. `.git/` internals are never served; `.env*`, `*.pem`, `id_*`, `*.key` are listed but their content is masked unless Guy enables "show secrets" for that project.
-3. Size cap (1 MB per file, 2000 lines of diff by default, "load more"), binary detection, no execution, no writes.
-4. For git projects `ref` defaults to the default branch and content is read with `git show`/`git ls-tree` (no working-tree races). A task's live WIP in an `sbx` clone is read through `sbx exec git ...` (read-only commands from an allowlist); after push it is read from the host clone's fetched branch.
-5. Rate/size limits and the loopback-only bind already apply.
-UI: a Files tab per project (tree + code view + task/branch selector) and a Diff panel on each task card (files changed, unified diff, "open in file viewer").
+All git calls use `execFile` with argv arrays (no shell), `--` before paths, `status --porcelain=v2 -z`, and a command allowlist. Hunk-level staging is a later enhancement.
+
+**Safety:**
+1. *Path sandboxing:* every path is resolved against the workspace root with `realpath`; it must stay inside the root (blocks `..`, absolute paths, and symlinks pointing outside; such symlinks are listed but not followed). Case-insensitive file systems (Windows, macOS) compare normalised real paths. Writes additionally refuse `.git/`, and the workspace root itself.
+2. *Secrets:* `.env*`, `*.pem`, `id_*`, `*.key` are listed but masked in the viewer unless Guy enables "show secrets" for that project.
+3. *Limits:* 2 MB per file for the editor, binary detection, diff size caps with "load more".
+4. *Concurrent edits, Guy vs agent* ("edit leases"): a workspace has an **owner** while a run is active on it (the agent's task worktree/clone). It opens **read-only** in the IDE with a banner "agent X is working here". Guy can **take over**: this soft-stops the run (checkpoint commit, task goes to `waiting_for_guy`), then the workspace becomes editable; when Guy is done he presses "hand back" (task re-queued with a note about his commit). Editing "anyway" is not offered. Saves also use `base_sha` optimistic concurrency, so a file changed on disk since it was opened returns 409 and Monaco shows a conflict diff. "My workspace" has no agent owner, so no lease is needed there.
+5. *Guy's commits and pushes* go to branches only; the existing pre-push hook and the API refuse main/master. Merging stays a PR + Guy's click.
+6. Loopback bind, API token, Host-header and Origin checks apply to every route above.
+
+### 2.6b Terminals
+- **Service:** a PTY service in the orchestrator using `@lydell/node-pty` (the same prebuilt-binary package JSM HQ uses: N-API prebuilds for win32-x64, darwin-arm64/x64, linux-x64, no compiler). Browser side: xterm.js with fit and web-links addons.
+- **Transport:** WebSocket `/term?session=<id>&token=...` on the loopback API port; checks token, Origin and Host header; JSON control frames (resize) + binary data frames; sessions survive a page reload (ring buffer replay) and die with the orchestrator.
+- **Session kinds:**
+  1. *Guy's project terminal:* a login shell (cmd/PowerShell/zsh/bash per OS) with cwd = "My workspace" or any workspace he opens; an "any folder" option behind a setting. This is Guy's own shell with Guy's rights, exactly like opening a terminal in an editor.
+  2. *Agent shell, host runner:* a shell in the agent's worktree (warning: same copy the agent is editing; shown next to the lease banner).
+  3. *Agent shell, sandboxed:* `sbx exec -it <sandbox> bash` through the PTY, so Guy lands inside the microVM.
+  4. *Agent live terminal (later):* attach to the agent CLI's own output; for v1 the structured log stream is shown, as today.
+- **Windows:** ConPTY (Windows 10 1809+) via node-pty. Packaging: `esbuild` keeps `@lydell/node-pty` external; the Tauri build copies the matching platform package into the bundled resources next to `orchestrator.mjs` and `release.yml` already builds per target, so each installer contains only its own prebuild. `fix` step: chmod the macOS/Linux `spawn-helper` (HQ ships the same fix). A CI smoke test spawns a PTY, echoes a string and resizes on windows/macos/ubuntu runners. If the PTY cannot load, the terminal tab shows a clear error and falls back to a non-interactive command runner (no TTY), so the rest of the app is unaffected.
+- **Safety:** one terminal grants a full shell, so it is gated by the same token as everything else, loopback only, no remote access, no sharing; sessions are listed (and killable) in the Activity board; ports are never forwarded automatically.
 
 ### 2.7 Who is doing what (Activity board)
 A derived view, no new source of truth: join `agents`, `runs`, `tasks`, `projects` and the latest `events` row. Endpoint `GET /api/activity` plus a WebSocket `activity` event:
 `{agent, state, project, task, task_type, status, branch, pr, runner, sandbox_name, started_at, last_heartbeat_at, tokens, last_event}` for live runs, and the last N finished runs for history, filterable by project/agent. UI: an Activity tab (table grouped by project, heartbeat age with a warning colour, click to open the live log or the task diff). Scripts appear in the same board.
+
+### 2.7b Agent workspace drawer
+Clicking an agent anywhere (cards, Activity board, kanban) opens a resizable drawer with tabs: **Overview** (state, task, branch, sandbox, heartbeat, tokens, controls: on/off, restart, stop), **Settings** (all profile fields from the Agents editor plus its role/instructions text and sandbox CPU/RAM with "recreate sandbox"), **Terminal** (2.6b), **Files** (the IDE view pinned to that agent's workspace, read-only under a lease), **Diff** (its task's branch vs base), **Messages** (its direct thread and bus messages), **Log** (live events). Everything in the drawer reuses the IDE, terminal and thread components; no separate implementation.
 
 ### 2.8 Unchanged principles
 Local-only and free (no cloud services, in-process scheduler, SQLite + git), loopback API with token, merge/accept always by Guy, agent cap and budgets as the token-saving mechanism, `sbx` as the default isolation.
 
 ## 3. Milestones (small, ordered PRs)
 
+The IDE pieces come early because they are the biggest day-to-day value and they do not depend on local tasks or automations.
+
 | # | Milestone | What Guy sees afterwards |
 |---|---|---|
-| M0 | Foundations: migrations table (#27), `projects.kind/root_path`, unified task columns, API compatibility kept | Nothing visibly new; existing data keeps working |
-| M1 | Local tasks and projects: folder/none projects, create/edit local + manual tasks, workspace repo mirror, import on start | Add a folder or "Personal" project, create tasks that are not Issues, they show on the same kanban with a source badge and are committed in the workspace repo |
-| M2 | Activity board: `/api/activity`, Activity tab, branch/sandbox/heartbeat/history | A live table of who is doing what, where, with branch and sandbox |
-| M3 | File viewer: tree/file/log API with path sandboxing, Files tab | Browse any project's files, read-only |
-| M4 | Diffs of agent work: task diff API/panel, accept/merge flow for local diffs | See exactly what an agent changed, on each task |
-| M5 | Threads and inbox: schema migration, per-agent inbox, direct chat, ask kinds/options | Inbox grouped by agent; talk to any agent; answer approvals with buttons |
-| M6 | Automations (manual): definitions, run on host/sbx, streamed logs, run history, script cap | Define a script, press Run, watch its log, see outputs |
-| M7 | Schedules, triggers and artifacts: cron/interval, run-on-start for missed, artifacts in the file viewer | Scripts run on their own; outputs appear as files |
-| M8 | Agent work on folder/none projects: `code` tasks on folders (local diff to accept), agent automations | Agents work on non-GitHub folders the same organized way |
+| M0 | Foundations: migrations table (#27/#33), `projects.kind/root_path`, unified task columns | Nothing visibly new; existing data keeps working |
+| M1 | IDE: browse and diff (read-only): workspace/file/git-read API with path sandboxing, IDE tab with file tree and Monaco tabs, git status and Monaco diff view, task diff panel | An IDE tab per project: browse files, open code with syntax highlighting, see uncommitted changes and what an agent changed on a task branch |
+| M2 | IDE: edit and version control: save with conflict detection, create/rename/delete, stage/unstage, commit, branches, push branch, "My workspace" clone, edit leases and take-over | Edit code and commit like a normal IDE, in a separate workspace the agents never touch; agent worktrees are read-only while they work, with take-over |
+| M3 | Terminals: PTY service, xterm.js, Guy's project terminal, sbx shell for sandboxed agents, node-pty bundled in installers and tested on Windows/macOS/Linux | A terminal per project and a shell inside any agent's sandbox |
+| M4 | Agent workspace drawer + Activity board: tabs Overview/Settings/Terminal/Files/Diff/Messages/Log; live who-does-what table with branch, sandbox, heartbeat, history | Click an agent to see and control everything about it; one board of who is doing what |
+| M5 | Local tasks and projects: folder/none projects, local + manual tasks, workspace repo mirror | Tasks that are not GitHub Issues on the same kanban, versioned in a local git repo; folder projects open in the IDE |
+| M6 | Threads and inbox (adopting HQ "action items"): per-agent inbox, direct chat, ask kinds with buttons, network-access requests | One inbox grouped by agent; talk to any agent; approve with buttons |
+| M7 | Automations (manual): definitions, run on host/sbx, streamed logs, history, script cap | Define a script, press Run, watch it, see outputs |
+| M8 | Schedules, triggers, artifacts | Scripts run on their own; outputs appear as files in the IDE |
+| M9 | Agents on folder projects: code tasks on folders with a local diff to accept, agent automations | Agents work on non-GitHub folders the same organized way |
 
-Parallel track (needs Guy's machine, gates trust in everything above): #24 sbx runner, #25 real provider streams, #26 Chief/`ask_guy` with a real model. Recommended to do them right after M0, because they can invalidate assumptions. Later/optional: #28, #29, #30, #31.
+Parallel track (needs Guy's machine): #24 sbx runner, #25 real provider streams, #26 Chief/`ask_guy` with a real model. Do them right after M0. Later/optional: #28, #29, #30, #31, tmux-style persistence so agents survive closing the app.
 
 ## 4. Decisions needed from Guy (defaults in bold)
-1. **Local task storage.** **SQLite for runtime + markdown files in a local workspace git repo with no remote (recommended)** vs markdown only vs SQLite only.
-2. **Script default runner.** **`sbx` (isolated); `host` per automation behind a warning (recommended)** vs host by default.
-3. **Direct chat with agents.** **Read-only advice; changes only via tasks (recommended)** vs letting a direct chat edit files.
+1. **Where Guy edits.** **A separate "My workspace" clone per project, never touched by agents (recommended)** vs editing the orchestrator's mirror (unsafe: it is reset on sync) vs editing agents' worktrees directly (conflicts).
+2. **Terminal power.** **Guy's terminal is a full shell with his rights, restricted to project workspaces by default, "any folder" as a setting (recommended)** vs unrestricted from day one.
+3. **Local task storage and script runner** (from revision 1, unchanged): **SQLite + markdown in a local git repo with no remote; scripts default to `sbx`, host behind a warning; direct chat with agents is read-only advice, changes via tasks.** One yes covers these.

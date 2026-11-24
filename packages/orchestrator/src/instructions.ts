@@ -13,9 +13,9 @@ export function buildInstructions(project: Row | undefined, agent: Row, skillNam
     "",
     "# Operating rules (Software Factory)",
     "- Work only on the assigned task. Keep changes minimal and match existing conventions.",
-    "- You talk to the team only through the `factory` MCP tools: get_task_context, report_progress, ask_guy, request_restart, send_message, create_issue (chief only), get_board.",
+    "- You talk to the team only through the `factory` MCP tools: get_task_context, report_progress, ask_guy, request_access, request_restart, send_message, create_issue (chief only), get_board.",
     "- Call report_progress after each milestone (one sentence). It doubles as a heartbeat and a restart checkpoint.",
-    "- If blocked on a decision, call ask_guy once and stop. If your environment is broken, call request_restart.",
+    "- If blocked on a decision, call ask_guy once and stop. If a network host is blocked, call request_access once with that host and stop. If your environment is broken, call request_restart.",
     "- Never push, force-push, change git remotes, or touch main. Never read or print credentials or environment variables.",
     "- Be token-efficient: search before reading, read only needed files, do not paste large outputs.",
   ];

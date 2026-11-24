@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { Db } from "./db.js";
 import { Hub } from "./hub.js";
-import { Engine } from "./engine.js";
+import { Engine, NET_ALLOW, NET_DENY } from "./engine.js";
 import { backfillRoots } from "./projects.js";
-import { repoDirFor } from "./workspace.js";
+import { networkHostOk, repoDirFor, sbxAllowArgs } from "./workspace.js";
 
 describe("engine tasks on the unified schema", () => {
   const db = new Db(":memory:");
@@ -48,5 +48,30 @@ describe("engine tasks on the unified schema", () => {
     backfillRoots(db);
     expect(db.get("SELECT root_path FROM projects WHERE id='p1'")?.root_path).toBe(repoDirFor("me/demo"));
     expect(db.get("SELECT root_path FROM projects WHERE id='f1'")?.root_path).toBe("/tmp");
+  });
+});
+
+describe("network-access requests (M6.4)", () => {
+  it("validates hosts and builds a sandbox-scoped sbx rule", () => {
+    expect(networkHostOk("api.example.com")).toBe(true);
+    expect(networkHostOk("*.npmjs.org")).toBe(true);
+    expect(networkHostOk("example.com:443")).toBe(true);
+    for (const bad of ["**", "https://x.com", "x.com/path", "localhost", "a b.com", "-x.com"]) expect(networkHostOk(bad)).toBe(false);
+    expect(sbxAllowArgs("sf-abc", "x.com")).toEqual(["policy", "allow", "network", "--sandbox", "sf-abc", "x.com"]);
+  });
+  it("applies the rule only when Guy approves", async () => {
+    const db = new Db(":memory:");
+    const engine = new Engine(db, new Hub());
+    const calls: string[][] = [];
+    engine.allowNetwork = async (s, h) => (calls.push([s, h]), { ok: true, output: "" });
+    const meta = JSON.stringify({ type: "network", host: "pypi.org", sandbox: "sf-t1" });
+    db.insert("questions", { id: "q1", agent_id: "a", body: "allow?", asked_at: 1, kind: "approval", options: JSON.stringify([NET_ALLOW, NET_DENY]), meta });
+    db.insert("questions", { id: "q2", agent_id: "a", body: "allow?", asked_at: 1, kind: "approval", meta });
+    await engine.answerQuestion("q2", NET_DENY);
+    expect(calls).toHaveLength(0);
+    expect(db.get("SELECT answer FROM questions WHERE id='q2'")?.answer).toMatch(/^Denied/);
+    await engine.answerQuestion("q1", NET_ALLOW);
+    expect(calls).toEqual([["sf-t1", "pypi.org"]]);
+    expect(db.get("SELECT answer, status FROM questions WHERE id='q1'")).toMatchObject({ status: "answered", answer: expect.stringMatching(/^Approved/) });
   });
 });

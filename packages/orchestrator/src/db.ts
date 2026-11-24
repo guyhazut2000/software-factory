@@ -127,6 +127,8 @@ UPDATE questions SET status='answered' WHERE answer IS NOT NULL;`);
   },
   // v8: direct-chat messages sent while the agent is busy are queued (pending=1) until its next get_task_context.
   { version: 8, name: "pending_notes", up: (db) => db.exec("ALTER TABLE messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0") },
+  // v9: structured ask payload (JSON), e.g. {"type":"network","host":..,"sandbox":..} for network-access requests.
+  { version: 9, name: "ask_meta", up: (db) => db.exec("ALTER TABLE questions ADD COLUMN meta TEXT") },
 ];
 
 export class Db {

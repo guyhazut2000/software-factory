@@ -7,6 +7,7 @@ export interface FactoryHost {
   reportProgress(runId: string, summary: string, percent?: number): Promise<string>;
   createIssue(runId: string, a: { title: string; body: string; labels?: string[]; agent?: string; project_id?: string }): Promise<string>;
   askGuy(runId: string, question: string, opts?: { kind?: AskKind; options?: string[] }): Promise<string>;
+  requestAccess(runId: string, host: string, reason: string): Promise<string>;
   requestRestart(runId: string, reason: string, summary?: string): Promise<string>;
   sendMessage(runId: string, to: string, body: string): Promise<string>;
   board(runId: string): Promise<unknown>;
@@ -18,6 +19,7 @@ export const TOOLS = [
   { name: "report_progress", description: "Report a short progress note (also a heartbeat and a restart checkpoint). Call after each milestone.", inputSchema: { type: "object", properties: { summary: str, percent: { type: "number" } }, required: ["summary"] } },
   { name: "create_issue", description: "Chief only: create a GitHub Issue that becomes a task. Optional agent name pins an agent.", inputSchema: { type: "object", properties: { title: str, body: str, labels: { type: "array", items: str }, agent: str, project_id: str }, required: ["title", "body"] } },
   { name: "ask_guy", description: "Ask Guy a blocking question. The task pauses (waiting_for_guy) and you will be resumed with the answer. After calling this, stop working.", inputSchema: { type: "object", properties: { question: str, kind: { type: "string", enum: [...ASK_KINDS], description: "question (default) | approval | action (a manual step for Guy) | credential" }, options: { type: "array", items: str, description: "Optional answer buttons" } }, required: ["question"] } },
+  { name: "request_access", description: "Ask Guy to allow outbound network access to one host from your sandbox (e.g. a blocked API or registry). The task pauses until Guy approves or denies in his inbox; if approved the host is allowed for this sandbox only. After calling this, stop working.", inputSchema: { type: "object", properties: { host: { type: "string", description: "Hostname, *.domain wildcard or IP, optional :port. No scheme or path." }, reason: str }, required: ["host", "reason"] } },
   { name: "request_restart", description: "Request a full sandbox restart from a checkpoint (use if the environment is broken). Include a summary of progress so far.", inputSchema: { type: "object", properties: { reason: str, summary: str }, required: ["reason"] } },
   { name: "send_message", description: "Send a message to another agent (by name, or 'chief') through the orchestrator bus. Logged and visible to Guy.", inputSchema: { type: "object", properties: { to: str, body: str }, required: ["to", "body"] } },
   { name: "get_board", description: "List agents and tasks with their status.", inputSchema: { type: "object", properties: {} } },
@@ -46,6 +48,7 @@ export async function handleMcp(host: FactoryHost, runId: string, req: Req): Pro
         else if (name === "report_progress") text = await host.reportProgress(runId, String(a.summary), a.percent);
         else if (name === "create_issue") text = await host.createIssue(runId, { title: String(a.title), body: String(a.body), labels: a.labels, agent: a.agent, project_id: a.project_id });
         else if (name === "ask_guy") text = await host.askGuy(runId, String(a.question), { kind: a.kind as AskKind | undefined, options: Array.isArray(a.options) ? a.options : undefined });
+        else if (name === "request_access") text = await host.requestAccess(runId, String(a.host), String(a.reason));
         else if (name === "request_restart") text = await host.requestRestart(runId, String(a.reason), a.summary);
         else if (name === "send_message") text = await host.sendMessage(runId, String(a.to), String(a.body));
         else if (name === "get_board") text = await host.board(runId);

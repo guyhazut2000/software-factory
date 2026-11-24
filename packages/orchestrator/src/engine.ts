@@ -12,7 +12,7 @@ import { TEMPLATES, ROLE_SKILLS } from "./templates.js";
 import { buildInstructions } from "./instructions.js";
 import { gh, getToken } from "./github.js";
 import { aheadCount, commitAllIfDirty, git } from "./git.js";
-import { createSbx, createWorktree, removeSbx, sandboxNameFor, ensureBaseClone, skillFiles, type Workspace } from "./workspace.js";
+import { allowSbxNetwork, createSbx, createWorktree, networkHostOk, removeSbx, sandboxNameFor, ensureBaseClone, skillFiles, type Workspace } from "./workspace.js";
 import { formatFindings, runScanners } from "./scanners.js";
 import { ASK_KINDS, type AskKind, type FactoryHost } from "./mcp.js";
 import { dataDir, now, slug, uid, which, stream } from "./util.js";
@@ -20,6 +20,17 @@ import { HttpError } from "./ide/paths.js";
 import { taskWorktreeDir } from "./ide/workspaces.js";
 import type { IdeHost } from "./ide/routes.js";
 
+export const NET_ALLOW = "Allow for this sandbox";
+export const NET_DENY = "Deny";
+function parseMeta(v: unknown): Record<string, unknown> | null {
+  if (typeof v !== "string") return null;
+  try {
+    const o: unknown = JSON.parse(v);
+    return o && typeof o === "object" ? (o as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
 type Control = { kind: "ask" | "restart" | "stop" | "stuck" | "timeout" | "budget" | "takeover"; reason: string; fresh?: boolean };
 
 interface Active {
@@ -899,6 +910,13 @@ export class Engine implements FactoryHost, IdeHost {
   async answerQuestion(id: string, answer: string): Promise<void> {
     const q = this.db.get("SELECT * FROM questions WHERE id=?", id);
     if (!q || q.answer) return;
+    const meta = parseMeta(q.meta);
+    if (meta?.type === "network" && typeof meta.host === "string" && typeof meta.sandbox === "string") {
+      if (answer === NET_ALLOW) {
+        const r = await this.allowNetwork(meta.sandbox, meta.host);
+        answer = r.ok ? `Approved: ${meta.host} is now allowed for sandbox ${meta.sandbox}.` : `Approved, but the sbx rule failed: ${r.output}`;
+      } else if (answer === NET_DENY) answer = `Denied: no network access to ${meta.host}. Continue without it or explain what you need.`;
+    }
     this.db.update("questions", id, { answer, answered_at: now(), status: "answered" });
     this.db.insert("messages", { id: uid(), channel: "chat", thread_id: q.thread_id ?? this.chiefThread(q.project_id), task_id: q.task_id, project_id: q.project_id, from_id: null, to_id: q.agent_id, body: `(answer) ${answer}`, created_at: now() });
     if (q.task_id) {
@@ -946,13 +964,23 @@ export class Engine implements FactoryHost, IdeHost {
     this.log(a, "system", `created issue #${issue.number}: ${args.title}`);
     return `Created issue #${issue.number} ${issue.html_url}`;
   }
-  async askGuy(runId: string, question: string, opts: { kind?: AskKind; options?: string[] } = {}): Promise<string> {
+  /** Applies an approved network-access ask; swappable in tests. */
+  allowNetwork: (sandbox: string, host: string) => Promise<{ ok: boolean; output: string }> = allowSbxNetwork;
+  async requestAccess(runId: string, host: string, reason: string): Promise<string> {
+    const a = this.act(runId);
+    host = host.trim().toLowerCase();
+    if (!networkHostOk(host)) throw new Error("host must be a hostname, *.domain or IP with optional :port (no scheme, path or **)");
+    if (this.settings().runner !== "sbx" || !a.task) throw new Error("Network rules only apply to sbx sandboxes; this run has no sandbox");
+    const sandbox = sandboxNameFor(a.task.id);
+    return this.askGuy(runId, `Allow network access to ${host} for sandbox ${sandbox}? Reason: ${reason}`, { kind: "approval", options: [NET_ALLOW, NET_DENY], meta: { type: "network", host, sandbox } });
+  }
+  async askGuy(runId: string, question: string, opts: { kind?: AskKind; options?: string[]; meta?: Record<string, unknown> } = {}): Promise<string> {
     const a = this.act(runId);
     const id = uid();
     const kind: AskKind = opts.kind && ASK_KINDS.includes(opts.kind) ? opts.kind : "question";
     const options = Array.isArray(opts.options) && opts.options.length ? JSON.stringify(opts.options.map(String).slice(0, 8)) : null;
     const threadId = this.chiefThread(a.task?.project_id ?? null);
-    this.db.insert("questions", { id, task_id: a.task?.id ?? null, agent_id: a.agent.id, project_id: a.task?.project_id ?? null, body: question, asked_at: now(), kind, options, thread_id: threadId });
+    this.db.insert("questions", { id, task_id: a.task?.id ?? null, agent_id: a.agent.id, project_id: a.task?.project_id ?? null, body: question, asked_at: now(), kind, options, thread_id: threadId, meta: opts.meta ? JSON.stringify(opts.meta) : null });
     this.db.insert("messages", { id: uid(), channel: "chat", thread_id: threadId, task_id: a.task?.id ?? null, from_id: a.agent.id, to_id: null, project_id: a.task?.project_id ?? null, body: `(question) ${question}`, created_at: now() });
     a.control = { kind: "ask", reason: question };
     this.log(a, "question", question);

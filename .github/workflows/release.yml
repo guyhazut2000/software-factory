@@ -33,9 +33,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @sf/orchestrator build
       - run: node apps/desktop/scripts/fetch-node.mjs ${{ matrix.target }}
+      - name: check the node-pty prebuild for this target can be bundled
+        run: node apps/desktop/scripts/prepare-resources.mjs ${{ matrix.target }}
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SF_TARGET_TRIPLE: ${{ matrix.target }} # picks the node-pty prebuild bundled by prepare-resources.mjs
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri

@@ -73,3 +73,27 @@ jobs:
           cat start2.log
           curl -sf http://127.0.0.1:47831/ | grep -q "window.__SF__"
           echo "second start OK"
+  pty-smoke:
+    # spawns a real shell through node-pty from the bundled sidecar layout (sf-node + resources/node_modules)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @sf/orchestrator build
+      - run: node apps/desktop/scripts/fetch-node.mjs ${{ matrix.target }}
+      - run: node apps/desktop/scripts/pty-smoke.mjs ${{ matrix.target }}
+      - name: cross-target layout for macOS x64 (prebuild fetched from the registry)
+        if: runner.os == 'macOS'
+        run: node apps/desktop/scripts/prepare-resources.mjs x86_64-apple-darwin "$RUNNER_TEMP/res-x64" && test -x "$RUNNER_TEMP/res-x64/node_modules/@lydell/node-pty-darwin-x64/prebuilds/darwin-x64/spawn-helper"

@@ -9,6 +9,7 @@ import { TEMPLATES } from "./templates.js";
 import { bootstrapLabels, getToken, gh, setToken } from "./github.js";
 import { ensureBaseClone, applySbxPolicy, repoDirFor } from "./workspace.js";
 import { newLocalProject } from "./projects.js";
+import { ideRoute } from "./ide/routes.js";
 import { now, uid } from "./util.js";
 
 type J = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -58,6 +59,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       setToken(b.token ?? null);
       return { ok: true };
     }
+    if (seg[1] === "ws") return ideRoute(db, method, url, b);
     if (p === "/api/repos") return gh.listRepos();
     if (p === "/api/sbx/policy" && method === "POST") return applySbxPolicy();
     if (p === "/api/settings" && method === "PUT") {
@@ -186,6 +188,8 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     if (url.pathname === "/ping") return void res.writeHead(200).end("ok");
     if (o.uiDir && req.method === "GET" && !url.pathname.startsWith("/api/") && url.pathname !== "/ws") return serveUi(req, res, url.pathname);
     if (req.headers.authorization !== `Bearer ${o.token}` && url.searchParams.get("token") !== o.token) return void res.writeHead(401).end("unauthorized");
+    // IDE routes expose file contents: loopback Host only (defence against DNS rebinding), on top of the token.
+    if (url.pathname.startsWith("/api/ws") && !/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? "")) return void res.writeHead(403).end("forbidden host");
     try {
       const out = await route(req.method ?? "GET", url, req.method === "GET" || req.method === "DELETE" ? {} : await body(req));
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out ?? { ok: true }));

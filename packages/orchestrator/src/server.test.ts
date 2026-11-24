@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Db } from "./db.js";
@@ -74,6 +75,25 @@ describe("api", () => {
     expect(st.projects.map((p: { kind: string }) => p.kind)).toEqual(expect.arrayContaining(["folder", "none"]));
     await call("DELETE", `/api/projects/${f.json.id}`);
     await call("DELETE", `/api/projects/${n.json.id}`);
+  });
+  it("IDE routes: list workspaces, browse a folder project, refuse escapes and foreign Host headers", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sf-wsapi-"));
+    writeFileSync(path.join(dir, "notes.md"), "hello");
+    const f = (await call("POST", "/api/projects", { kind: "folder", root_path: dir })).json;
+    const wid = `p-${f.id}`;
+    expect((await call("GET", "/api/ws")).json.map((w: { id: string }) => w.id)).toContain(wid);
+    expect((await call("GET", `/api/ws/${wid}/tree`)).json.map((e: { name: string }) => e.name)).toEqual(["notes.md"]);
+    expect((await call("GET", `/api/ws/${wid}/file?path=notes.md`)).json).toMatchObject({ content: "hello", language: "markdown" });
+    expect((await call("GET", `/api/ws/${wid}/file?path=../x`)).status).toBe(400);
+    expect((await call("GET", `/api/ws/${wid}/git/log`)).json).toEqual([]);
+    expect((await call("GET", `/api/ws/p-nope/tree`)).status).toBe(404);
+    expect((await call("GET", `/api/ws/..%2F..%2Fetc/tree`)).status).toBe(400);
+    const r = await new Promise<number>((resolve) => {
+      const req = http.request({ host: "127.0.0.1", port: srv.apiPort, path: `/api/ws/${wid}/tree`, headers: { host: "evil.example", authorization: "Bearer t" } }, (res) => resolve(res.statusCode ?? 0));
+      req.end();
+    });
+    expect(r).toBe(403);
+    await call("DELETE", `/api/projects/${f.id}`);
   });
   it("agent listener rejects unknown runs", async () => {
     const r = await fetch(`http://127.0.0.1:${srv.agentPort}/mcp/nope`, { method: "POST", body: "{}" });

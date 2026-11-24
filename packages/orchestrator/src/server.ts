@@ -37,7 +37,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     projects: db.all("SELECT * FROM projects ORDER BY created_at"),
     tasks: db.all("SELECT * FROM tasks WHERE type<>'review' ORDER BY created_at DESC LIMIT 300").map((t) => ({ ...t, running: [...engine.active.values()].some((a) => a.task?.id === t.id) })),
     reviews: db.all("SELECT id,title,status,note,pr_number,project_id FROM tasks WHERE type='review' ORDER BY created_at DESC LIMIT 50"),
-    questions: db.all("SELECT * FROM questions WHERE answer IS NULL ORDER BY asked_at"),
+    questions: db.all("SELECT * FROM questions WHERE answer IS NULL AND status='open' ORDER BY asked_at"),
     settings: engine.settings(),
     running: [...engine.active.values()].map((a) => ({ run_id: a.runId, agent_id: a.agent.id, task_id: a.task?.id ?? null, started_at: a.startedAt, tokens: a.tokens })),
     templates: TEMPLATES,
@@ -184,6 +184,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       void engine.chat(b.project_id ?? null, String(b.text));
       return { ok: true };
     }
+    if (seg[1] === "questions" && id && act === "dismiss" && method === "POST") return engine.dismissQuestion(id), { ok: true };
     if (seg[1] === "questions" && id && act === "answer") return await engine.answerQuestion(id, String(b.answer)), { ok: true };
     if (p === "/api/costs") {
       const per_agent = db.all("SELECT a.name, a.id, COALESCE(SUM(c.input_tokens),0) AS input_tokens, COALESCE(SUM(c.output_tokens),0) AS output_tokens, COALESCE(SUM(c.usd),0) AS usd FROM agents a LEFT JOIN costs c ON c.agent_id=a.id GROUP BY a.id");

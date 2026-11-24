@@ -223,6 +223,11 @@ describe("api", () => {
     await engine.answerQuestion(q.id, "yes");
     expect(db.get("SELECT status FROM questions WHERE id=?", q.id)!.status).toBe("answered");
     expect(db.get("SELECT thread_id FROM messages WHERE body='(answer) yes'")!.thread_id).toBe(threads[0].id);
+    db.insert("questions", { id: "qd", task_id: null, agent_id: "ag1", project_id: "thr", body: "Key?", asked_at: 2, kind: "credential" });
+    expect(((await call("GET", "/api/state")).json as { questions: { id: string }[] }).questions.map((x) => x.id)).toContain("qd");
+    expect((await call("POST", "/api/questions/qd/dismiss", {})).json).toEqual({ ok: true });
+    expect(db.get("SELECT status FROM questions WHERE id='qd'")!.status).toBe("dismissed");
+    expect(((await call("GET", "/api/state")).json as { questions: { id: string }[] }).questions.map((x) => x.id)).not.toContain("qd");
   });
   it("direct chat: one direct thread per agent; busy agent gets a queued note via get_task_context", async () => {
     db.insert("agents", { ...db.get("SELECT * FROM agents LIMIT 1")!, id: "dag", name: "Advisor", role: "developer", created_at: 1 });

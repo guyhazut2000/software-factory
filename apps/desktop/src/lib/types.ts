@@ -13,7 +13,9 @@ export interface Task {
   assignee_id: string | null; branch: string | null; pr_number: number | null; pr_url: string | null; summary: string; note: string;
   restart_count: number; running: boolean; updated_at: number;
 }
-export interface Question { id: string; task_id: string | null; agent_id: string; project_id: string | null; body: string; asked_at: number }
+export interface Question { id: string; task_id: string | null; agent_id: string; project_id: string | null; body: string; asked_at: number; kind?: AskKind; options?: string | null; thread_id?: string | null; status?: string }
+export type AskKind = "question" | "approval" | "action" | "credential";
+export interface Thread { id: string; agent_id: string | null; project_id: string | null; task_id: string | null; title: string; kind: "chief" | "direct" | "ask"; status: string; created_at: number }
 export interface Settings {
   mode: "quiet" | "eco" | "full"; cap: number; runner: "sbx" | "worktree"; allow_worktree: boolean; stopped: boolean;
   agent_host: string; stuck_minutes: number; max_restarts: number; max_review_rounds: number;

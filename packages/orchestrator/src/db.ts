@@ -62,6 +62,32 @@ INSERT INTO projects_v2 (id,name,kind,repo,root_path,default_branch,instructions
 DROP TABLE projects;
 ALTER TABLE projects_v2 RENAME TO projects;`),
   },
+  // v3: unified tasks. Rebuild `tasks`: project_id nullable, source/type/external_ref and planning fields.
+  // `issue_number` and `kind` stay readable (generated columns) so the v0.1 API and UI keep working.
+  {
+    version: 3,
+    name: "unified_tasks",
+    up: (db) =>
+      db.exec(`
+CREATE TABLE tasks_v3 (
+  id TEXT PRIMARY KEY, project_id TEXT,
+  source TEXT NOT NULL DEFAULT 'github' CHECK (source IN ('github','local')),
+  type TEXT NOT NULL DEFAULT 'code' CHECK (type IN ('code','script','manual','review')),
+  external_ref TEXT, md_path TEXT, priority INTEGER, due_at INTEGER, parent_id TEXT, automation_id TEXT,
+  title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'queued', assignee_id TEXT, author_id TEXT,
+  branch TEXT, pr_number INTEGER, pr_url TEXT, summary TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+  restart_count INTEGER NOT NULL DEFAULT 0, labels TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  issue_number INTEGER GENERATED ALWAYS AS (CASE WHEN source = 'github' THEN CAST(external_ref AS INTEGER) END) VIRTUAL,
+  kind TEXT GENERATED ALWAYS AS (CASE type WHEN 'code' THEN 'dev' ELSE type END) VIRTUAL,
+  CHECK (source <> 'github' OR (project_id IS NOT NULL AND external_ref IS NOT NULL)));
+INSERT INTO tasks_v3 (id,project_id,source,type,external_ref,title,body,status,assignee_id,author_id,branch,pr_number,pr_url,summary,note,restart_count,labels,created_at,updated_at)
+  SELECT id,project_id,CASE WHEN issue_number IS NULL THEN 'local' ELSE 'github' END,CASE kind WHEN 'review' THEN 'review' ELSE 'code' END,
+         CAST(issue_number AS TEXT),title,body,status,assignee_id,author_id,branch,pr_number,pr_url,summary,note,restart_count,labels,created_at,updated_at FROM tasks;
+DROP TABLE tasks;
+ALTER TABLE tasks_v3 RENAME TO tasks;
+CREATE INDEX tasks_status ON tasks(status, type);
+CREATE INDEX tasks_ref ON tasks(project_id, source, external_ref);`),
+  },
 ];
 
 export class Db {

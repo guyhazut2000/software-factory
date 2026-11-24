@@ -8,7 +8,8 @@ export interface Agent {
 export interface Project { id: string; name: string; kind: "github" | "folder" | "none"; repo: string | null; root_path: string | null; default_branch: string; instructions: string }
 export const projectLabel = (p: Pick<Project, "repo" | "name">) => p.repo ?? p.name;
 export interface Task {
-  id: string; project_id: string; issue_number: number | null; title: string; body: string; status: string;
+  id: string; project_id: string | null; source: "github" | "local"; type: "code" | "script" | "manual" | "review"; external_ref: string | null;
+  priority: number | null; due_at: number | null; parent_id: string | null; issue_number: number | null; title: string; body: string; status: string;
   assignee_id: string | null; branch: string | null; pr_number: number | null; pr_url: string | null; summary: string; note: string;
   restart_count: number; running: boolean; updated_at: number;
 }

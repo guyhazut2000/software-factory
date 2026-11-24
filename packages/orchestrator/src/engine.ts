@@ -239,9 +239,9 @@ export class Engine implements FactoryHost {
   }
 
   async createTaskFromIssue(project: Row, n: number, title: string, body: string, labels: string[]): Promise<Row> {
-    const ex = this.db.get("SELECT * FROM tasks WHERE project_id=? AND issue_number=? AND kind='dev'", project.id, n);
+    const ex = this.db.get("SELECT * FROM tasks WHERE project_id=? AND source='github' AND external_ref=? AND type='code'", project.id, String(n));
     if (ex) return ex;
-    const row: Row = { id: uid(), project_id: project.id, issue_number: n, title, body, kind: "dev", status: "queued", labels: JSON.stringify(labels), created_at: now(), updated_at: now() };
+    const row: Row = { id: uid(), project_id: project.id, source: "github", type: "code", external_ref: String(n), title, body, status: "queued", labels: JSON.stringify(labels), created_at: now(), updated_at: now() };
     this.db.insert("tasks", row);
     this.hub.emitEvent({ type: "tasks" });
     return row;
@@ -262,7 +262,7 @@ export class Engine implements FactoryHost {
   }
 
   async refreshPrs(): Promise<void> {
-    for (const t of this.db.all("SELECT * FROM tasks WHERE kind='dev' AND status IN ('in_review') AND pr_number IS NOT NULL")) {
+    for (const t of this.db.all("SELECT * FROM tasks WHERE type='code' AND status IN ('in_review') AND pr_number IS NOT NULL")) {
       const p = this.db.get("SELECT * FROM projects WHERE id=?", t.project_id);
       if (!p) continue;
       try {
@@ -297,7 +297,7 @@ export class Engine implements FactoryHost {
       const okState = a.state === "idle" || (a.state === "waiting_for_guy" && t.assignee_id === a.id) || (a.state === "restarting" && t.assignee_id === a.id);
       if (!okState) return false;
       if (pinned && a.name !== pinned) return false;
-      if (t.kind === "review") return a.permissions.includes("review") && a.id !== t.author_id;
+      if (t.type === "review") return a.permissions.includes("review") && a.id !== t.author_id;
       if (!a.permissions.includes("open_pr")) return false;
       if (t.assignee_id && t.assignee_id !== a.id && this.db.get("SELECT 1 AS x FROM agents WHERE id=? AND enabled=1", t.assignee_id) && t.restart_count > 0) return false;
       return true;
@@ -312,6 +312,13 @@ export class Engine implements FactoryHost {
     return !!a.token_budget && a.tokens_today >= a.token_budget;
   }
 
+  /** Queued tasks an agent may pick up: code/review tasks on GitHub projects (manual and script tasks never go to agents). */
+  runnableTasks(): Row[] {
+    return this.db.all(
+      "SELECT * FROM tasks WHERE status='queued' AND type IN ('code','review') AND project_id IN (SELECT id FROM projects WHERE kind='github') ORDER BY CASE type WHEN 'review' THEN 0 ELSE 1 END, created_at",
+    );
+  }
+
   async tick(): Promise<void> {
     const s = this.settings();
     if (s.stopped || s.mode === "quiet") return;
@@ -324,8 +331,7 @@ export class Engine implements FactoryHost {
       this.lastPr = Date.now();
       void this.refreshPrs();
     }
-    const tasks = this.db.all("SELECT * FROM tasks WHERE status='queued' ORDER BY CASE kind WHEN 'review' THEN 0 ELSE 1 END, created_at");
-    for (const t of tasks) {
+    for (const t of this.runnableTasks()) {
       if (this.scheduler.size >= this.scheduler.cap) break;
       if ([...this.active.values()].some((a) => a.task?.id === t.id)) continue;
       const agent = this.pickAgent(t);
@@ -400,12 +406,12 @@ export class Engine implements FactoryHost {
     this.supervisor.start(act.runId, now());
     this.setState(agent.id, agent.state === "restarting" ? "restarted" : agent.state === "waiting_for_guy" ? "answer" : "assign");
     this.db.update("agents", agent.id, { current_task_id: task.id });
-    this.setTask(task.id, { status: "working", assignee_id: task.kind === "review" ? task.assignee_id : agent.id, note: "" });
+    this.setTask(task.id, { status: "working", assignee_id: task.type === "review" ? task.assignee_id : agent.id, note: "" });
     this.log(act, "system", `${agent.name} starts "${task.title}" (${agent.provider}/${agent.model}, ${this.settings().runner})`);
     try {
       if (!project) throw new Error("Project not found");
       if (project.kind !== "github") throw new Error(`Agents cannot run on ${project.kind} projects yet (planned in M9)`);
-      if (task.kind === "review") await this.runReview(act, project);
+      if (task.type === "review") await this.runReview(act, project);
       else await this.runDev(act, project);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -586,7 +592,7 @@ export class Engine implements FactoryHost {
     await ws.destroy(false);
     const reviewer = this.listAgents().find((a) => a.enabled && a.permissions.includes("review") && a.id !== agent.id);
     if (reviewer) {
-      this.db.insert("tasks", { id: uid(), project_id: project.id, issue_number: task!.issue_number, title: `Review PR #${pr.number}: ${task!.title}`, body: "", kind: "review", status: "queued", author_id: agent.id, branch, pr_number: pr.number, pr_url: pr.html_url, labels: "[]", created_at: now(), updated_at: now() });
+      this.db.insert("tasks", { id: uid(), project_id: project.id, source: task!.source, type: "review", external_ref: task!.external_ref, parent_id: task!.id, title: `Review PR #${pr.number}: ${task!.title}`, body: "", status: "queued", author_id: agent.id, branch, pr_number: pr.number, pr_url: pr.html_url, labels: "[]", created_at: now(), updated_at: now() });
       this.hub.emitEvent({ type: "tasks" });
     } else this.setTask(task!.id, { note: "PR open: no reviewer agent enabled, ready for Guy" });
     this.notify("PR ready", `${agent.name} opened PR #${pr.number}: ${task!.title}`);
@@ -631,9 +637,9 @@ export class Engine implements FactoryHost {
     const approved = /VERDICT:\s*APPROVE/i.test(text) && !/CHANGES_REQUESTED/i.test(text);
     await gh.comment(project.repo, task!.pr_number!, `### Review by **${agent.name}** (${agent.provider}/${agent.model})\n\n${findingsText.split("\n")[0]}\n\n${text}`).catch(() => {});
     this.setTask(task!.id, { status: "done", note: approved ? "approved" : "changes requested" });
-    const dev = this.db.get("SELECT * FROM tasks WHERE kind='dev' AND project_id=? AND pr_number=?", project.id, task!.pr_number);
+    const dev = this.db.get("SELECT * FROM tasks WHERE type='code' AND project_id=? AND pr_number=?", project.id, task!.pr_number);
     if (dev) {
-      const rounds = this.db.all("SELECT 1 FROM tasks WHERE kind='review' AND pr_number=? AND project_id=?", task!.pr_number, project.id).length;
+      const rounds = this.db.all("SELECT 1 FROM tasks WHERE type='review' AND pr_number=? AND project_id=?", task!.pr_number, project.id).length;
       if (!approved && rounds <= this.settings().max_review_rounds) {
         this.setTask(dev.id, { status: "queued", summary: `${dev.summary}\n\nReviewer feedback to address:\n${text.slice(0, 1500)}`, note: "Addressing review feedback" });
       } else this.setTask(dev.id, { note: approved ? "Approved by reviewer: ready for Guy to merge" : "Reviewer requested changes: needs Guy" });
@@ -781,7 +787,7 @@ export class Engine implements FactoryHost {
   async board(): Promise<unknown> {
     return {
       agents: this.listAgents().map((a) => ({ name: a.name, role: a.role, state: a.state, skills: a.skills })),
-      tasks: this.db.all("SELECT id,title,status,issue_number,pr_number FROM tasks WHERE kind='dev' ORDER BY created_at DESC LIMIT 30"),
+      tasks: this.db.all("SELECT id,title,status,type,source,issue_number,pr_number FROM tasks WHERE type<>'review' ORDER BY created_at DESC LIMIT 30"),
     };
   }
 

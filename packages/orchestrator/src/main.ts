@@ -6,8 +6,10 @@ import { Hub } from "./hub.js";
 import { Engine } from "./engine.js";
 import { startServers } from "./server.js";
 import { dataDir } from "./util.js";
+import { backfillRoots } from "./projects.js";
 
 const db = new Db(process.env.SF_DB ?? path.join(dataDir(), "factory.db"));
+backfillRoots(db);
 const hub = new Hub();
 const engine = new Engine(db, hub);
 const token = (process.env.SF_API_TOKEN ?? "").trim() || crypto.randomBytes(16).toString("hex");

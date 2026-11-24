@@ -30,8 +30,8 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
   const state = () => ({
     agents: engine.listAgents(),
     projects: db.all("SELECT * FROM projects ORDER BY created_at"),
-    tasks: db.all("SELECT * FROM tasks WHERE kind='dev' ORDER BY created_at DESC LIMIT 300").map((t) => ({ ...t, running: [...engine.active.values()].some((a) => a.task?.id === t.id) })),
-    reviews: db.all("SELECT id,title,status,note,pr_number,project_id FROM tasks WHERE kind='review' ORDER BY created_at DESC LIMIT 50"),
+    tasks: db.all("SELECT * FROM tasks WHERE type<>'review' ORDER BY created_at DESC LIMIT 300").map((t) => ({ ...t, running: [...engine.active.values()].some((a) => a.task?.id === t.id) })),
+    reviews: db.all("SELECT id,title,status,note,pr_number,project_id FROM tasks WHERE type='review' ORDER BY created_at DESC LIMIT 50"),
     questions: db.all("SELECT * FROM questions WHERE answer IS NULL ORDER BY asked_at"),
     settings: engine.settings(),
     running: [...engine.active.values()].map((a) => ({ run_id: a.runId, agent_id: a.agent.id, task_id: a.task?.id ?? null, started_at: a.startedAt, tokens: a.tokens })),

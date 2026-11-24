@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { Activity, Bot, Code2, Coins, FolderGit2, HeartPulse, MessageSquare, Moon, OctagonX, Play, Settings as Cog, Sun } from "lucide-react";
+import { Activity, Bot, Users, Code2, Coins, FolderGit2, HeartPulse, MessageSquare, Moon, OctagonX, Play, Settings as Cog, Sun } from "lucide-react";
 import { useStore } from "./lib/store";
 import { api } from "./lib/api";
 import { Badge, Button, Select } from "./components/ui";
@@ -11,6 +11,7 @@ import { Chief } from "./pages/Chief";
 import { Costs } from "./pages/Costs";
 import { Setup } from "./pages/Setup";
 import { SettingsPage } from "./pages/SettingsPage";
+import { ActivityPage } from "./pages/Activity";
 
 // Monaco is heavy: load the IDE (and the editor) only when the tab is opened.
 const Ide = lazy(() => import("./pages/Ide"));
@@ -19,6 +20,7 @@ const TABS = [
   { id: "dashboard", label: "Dashboard", icon: Activity },
   { id: "chief", label: "Chief", icon: MessageSquare },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "activity", label: "Activity", icon: Users },
   { id: "ide", label: "IDE", icon: Code2 },
   { id: "projects", label: "Projects", icon: FolderGit2 },
   { id: "costs", label: "Costs", icon: Coins },
@@ -86,6 +88,7 @@ export function App() {
         {tab === "ide" && <Suspense fallback={<div className="p-8 text-center text-muted-foreground">Loading the editor...</div>}><Ide initial={ideWs} /></Suspense>}
         {tab === "chief" && <Chief />}
         {tab === "agents" && <Agents />}
+        {tab === "activity" && <ActivityPage />}
         {tab === "projects" && <Projects />}
         {tab === "costs" && <Costs />}
         {tab === "setup" && <Setup />}

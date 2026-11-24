@@ -2,6 +2,7 @@ import type { Db } from "../db.js";
 import { atRef, disk, gitText, verifyRef } from "./files.js";
 import { HttpError, cleanRel } from "./paths.js";
 import { diffFiles, diffPair, diffSpec, status } from "./gitread.js";
+import { fsOp, saveFile } from "./write.js";
 import { getWorkspace, listWorkspaces, type IdeWorkspace } from "./workspaces.js";
 
 const showSecrets = (db: Db, w: IdeWorkspace) => !!w.project_id && db.getSetting<string[]>("show_secrets", []).includes(w.project_id);
@@ -24,7 +25,7 @@ export async function gitLog(w: IdeWorkspace, ref: string | undefined, rel: unkn
   });
 }
 
-/** `/api/ws/...` routes (read-only in M1). Returns undefined if the path is not an IDE route. */
+/** `/api/ws/...` routes (writes only in writable workspaces). Returns undefined if the path is not an IDE route. */
 export async function ideRoute(db: Db, method: string, url: URL, b: Record<string, unknown>): Promise<unknown> {
   const seg = url.pathname.split("/").filter(Boolean); // api ws :wid ...rest
   if (seg[1] !== "ws") return undefined;
@@ -65,6 +66,10 @@ export async function ideRoute(db: Db, method: string, url: URL, b: Record<strin
     const spec = await diffSpec(w.root, { mode, base, head, worktree });
     if (!q.get("path")) return { label: spec.label, ...(await diffFiles(w.root, spec)) };
     return diffPair(w.root, spec, q.get("path"), q.get("orig"), showSecrets(db, w));
+  }
+  if ((method === "PUT" && rest === "file") || (method === "POST" && rest === "fs")) {
+    if (w.read_only || w.ref) throw new HttpError(403, "this workspace is read-only");
+    return rest === "file" ? saveFile(w.root, q.get("path"), b.content, b.base_sha) : fsOp(w.root, b);
   }
   if (method === "POST" && rest === "show-secrets") {
     if (!w.project_id) throw new HttpError(400, "no project");

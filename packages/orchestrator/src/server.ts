@@ -195,7 +195,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out ?? { ok: true }));
     } catch (e) {
       const status = (e as { status?: number }).status ?? 400;
-      res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+      res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: e instanceof Error ? e.message : String(e), ...(e as { extra?: object }).extra }));
     }
   });
   const wss = new WebSocketServer({ noServer: true });

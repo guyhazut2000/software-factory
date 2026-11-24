@@ -196,6 +196,17 @@ export async function createSbx(opts: { repo: string; base: string; branch: stri
   return ws;
 }
 
+/** A host an agent may ask for: hostname, `*.domain` wildcard, or IP, optional `:port`. No `**`, schemes or paths. */
+export function networkHostOk(host: string): boolean {
+  return host.length <= 253 && /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$/i.test(host);
+}
+/** Docker sbx docs: `sbx policy allow network [--sandbox SANDBOX] RESOURCES` scopes the rule to one sandbox. */
+export const sbxAllowArgs = (sandbox: string, host: string) => ["policy", "allow", "network", "--sandbox", sandbox, host];
+export async function allowSbxNetwork(sandbox: string, host: string): Promise<{ ok: boolean; output: string }> {
+  const r = await run("sbx", sbxAllowArgs(sandbox, host), { timeoutMs: 60_000 });
+  return { ok: r.code === 0, output: (r.stderr || r.stdout).trim().slice(0, 300) };
+}
+
 /** One-time network policy for sandboxes: GitHub + model providers. */
 export async function applySbxPolicy(): Promise<string[]> {
   const log: string[] = [];

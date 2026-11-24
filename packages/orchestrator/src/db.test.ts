@@ -84,3 +84,25 @@ describe("v2 project kinds", () => {
     expect(() => db.insert("projects", { id: "i", name: "x", kind: "bogus", created_at: 1 })).toThrow();
   });
 });
+
+describe("v3 unified tasks", () => {
+  it("backfills source/type/external_ref and keeps issue_number and kind readable", () => {
+    const f = tmp();
+    const old = new DatabaseSync(f);
+    old.exec(V010);
+    old.exec("INSERT INTO tasks (id,project_id,issue_number,title,kind,status,pr_number,created_at,updated_at) VALUES ('r1','p1',7,'Review PR #3','review','queued',3,2,2)");
+    old.close();
+    const db = new Db(f);
+    expect(db.get("SELECT * FROM tasks WHERE id='t1'")).toMatchObject({ source: "github", type: "code", external_ref: "7", issue_number: 7, kind: "dev", title: "Fix bug", project_id: "p1" });
+    expect(db.get("SELECT * FROM tasks WHERE id='r1'")).toMatchObject({ type: "review", kind: "review", issue_number: 7, pr_number: 3 });
+    expect(db.get("SELECT id FROM tasks WHERE project_id='p1' AND issue_number=7 AND kind='dev'")?.id).toBe("t1");
+    db.close();
+  });
+  it("supports loose local tasks and planning fields", () => {
+    const db = new Db(":memory:");
+    db.insert("tasks", { id: "l1", source: "local", type: "manual", title: "Pay bills", priority: 1, due_at: 5, md_path: "tasks/_loose/l1-pay-bills.md", created_at: 1, updated_at: 1 });
+    expect(db.get("SELECT * FROM tasks WHERE id='l1'")).toMatchObject({ project_id: null, issue_number: null, kind: "manual", priority: 1 });
+    expect(() => db.insert("tasks", { id: "g1", source: "github", title: "no ref", project_id: "p", created_at: 1, updated_at: 1 })).toThrow();
+    expect(() => db.insert("tasks", { id: "x1", source: "local", type: "bogus", title: "x", created_at: 1, updated_at: 1 })).toThrow();
+  });
+});

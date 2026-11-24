@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -125,6 +125,46 @@ describe("api", () => {
     expect((await call("GET", "/api/ws/t-tk1/git/status")).json.pinned).toBe(true);
     db.run("DELETE FROM tasks WHERE id='tk1'");
     db.run("DELETE FROM projects WHERE id='gp'");
+  });
+  it("IDE my workspace: separate clone, the only writable kind, real write through the server", async () => {
+    const prev = process.env.SF_DATA_DIR;
+    process.env.SF_DATA_DIR = mkdtempSync(path.join(tmpdir(), "sf-data-"));
+    const repo = mkdtempSync(path.join(tmpdir(), "sf-mine-"));
+    const g = (cwd: string, ...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd }).toString().trim();
+    g(repo, "init", "-q", "-b", "main");
+    writeFileSync(path.join(repo, "app.js"), "v1\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-qm", "base");
+    g(repo, "remote", "add", "origin", "https://github.com/me/mine-demo.git");
+    db.insert("projects", { id: "mp", name: "demo", kind: "github", repo: "me/mine-demo", root_path: repo, default_branch: "main", created_at: 1 });
+    try {
+      let ws = (await call("GET", "/api/ws")).json.find((w: { id: string }) => w.id === "m-mp");
+      expect(ws).toMatchObject({ kind: "mine", exists: false, read_only: true });
+      expect((await call("PUT", "/api/ws/m-mp/file?path=app.js", { content: "x", base_sha: null })).status).toBe(403);
+      expect((await call("POST", "/api/ws/p-mp/create")).status).toBe(400);
+      ws = (await call("POST", "/api/ws/m-mp/create")).json;
+      expect(ws).toMatchObject({ kind: "mine", exists: true, read_only: false });
+      expect((await call("POST", "/api/ws/m-mp/create")).status).toBe(200); // idempotent
+      const mine = path.join(process.env.SF_DATA_DIR, "ide", "mp");
+      expect(realpathSync(ws.root)).toBe(realpathSync(mine));
+      expect(g(mine, "config", "--get", "remote.origin.url")).toBe("https://github.com/me/mine-demo.git");
+      const f = (await call("GET", "/api/ws/m-mp/file?path=app.js")).json;
+      const put = await call("PUT", "/api/ws/m-mp/file?path=app.js", { content: "v2\n", base_sha: f.sha256 });
+      expect(put.status).toBe(200);
+      expect(readFileSync(path.join(mine, "app.js"), "utf8")).toBe("v2\n");
+      expect((await call("PUT", "/api/ws/m-mp/file?path=app.js", { content: "v3\n", base_sha: f.sha256 })).status).toBe(409);
+      expect((await call("POST", "/api/ws/m-mp/fs", { op: "mkdir", path: "src" })).status).toBe(200);
+      expect((await call("PUT", "/api/ws/m-mp/file?path=src/new.ts", { content: "export {};\n", base_sha: null })).status).toBe(200);
+      expect((await call("GET", "/api/ws/m-mp/git/status")).json.changes.map((c: { path: string }) => c.path).sort()).toEqual(["app.js", "src/new.ts"]);
+      // the mirror is untouched and still read-only
+      expect(readFileSync(path.join(repo, "app.js"), "utf8").replace(/\r\n/g, "\n")).toBe("v1\n");
+      expect((await call("PUT", "/api/ws/p-mp/file?path=app.js", { content: "x", base_sha: null })).status).toBe(403);
+      expect((await call("POST", "/api/ws/p-mp/fs", { op: "delete", path: "app.js" })).status).toBe(403);
+    } finally {
+      if (prev === undefined) delete process.env.SF_DATA_DIR;
+      else process.env.SF_DATA_DIR = prev;
+      db.run("DELETE FROM projects WHERE id='mp'");
+    }
   });
   it("agent listener rejects unknown runs", async () => {
     const r = await fetch(`http://127.0.0.1:${srv.agentPort}/mcp/nope`, { method: "POST", body: "{}" });

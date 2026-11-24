@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import { Copy, Pencil, Plus, SquareTerminal, Trash2 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api } from "../lib/api";
 import { Badge, Button, Card, Dialog, Input, Label, Select, StateDot, Switch, Textarea } from "../components/ui";
 import type { Agent } from "../lib/types";
+import { TerminalPanel } from "../ide/Terminal";
 
 const MODELS: Record<string, string[]> = { "claude-code": ["sonnet", "opus", "haiku"], codex: ["gpt-5-codex", "gpt-5"], cursor: ["auto", "sonnet-4.5", "gpt-5"] };
 const PERMS = ["advise", "open_pr", "review", "merge", "create_issue"];
@@ -15,6 +16,7 @@ const blank = (): Partial<Agent> => ({ name: "", role: "developer", description:
 export function Agents() {
   const { state, refresh, toast } = useStore();
   const [edit, setEdit] = useState<Partial<Agent> | null>(null);
+  const [term, setTerm] = useState<Agent | null>(null);
   if (!state) return null;
   const wrap = (fn: () => Promise<unknown>) => fn().then(refresh).catch((e) => toast(String(e.message ?? e)));
   const save = () => wrap(async () => { if (edit?.id) await api(`/api/agents/${edit.id}`, "PUT", edit); else await api("/api/agents", "POST", edit); setEdit(null); });
@@ -39,6 +41,10 @@ export function Agents() {
               <div className="truncate text-xs text-muted-foreground">{a.provider} / {a.model} / {a.effort} / perms: {a.permissions.join(", ") || "none"} / skills: {a.skills.join(", ") || "role defaults"}</div>
             </div>
             <Switch checked={a.enabled} onChange={(on) => wrap(() => api(`/api/agents/${a.id}/toggle`, "POST", { on }))} />
+            {(() => {
+              const live = state.running.some((r) => r.agent_id === a.id);
+              return <Button size="sm" variant="outline" title={live ? "Open a shell in this agent's sandbox / worktree" : "The agent has no live workspace (not running)"} disabled={!live} onClick={() => setTerm(a)}><SquareTerminal size={13} />Terminal</Button>;
+            })()}
             <Button size="icon" variant="ghost" title="Edit" onClick={() => setEdit(a)}><Pencil size={14} /></Button>
             <Button size="icon" variant="ghost" title="Clone" onClick={() => wrap(() => api(`/api/agents/${a.id}/clone`, "POST", {}))}><Copy size={14} /></Button>
             <Button size="icon" variant="ghost" title="Delete" onClick={() => confirm(`Delete ${a.name}?`) && wrap(() => api(`/api/agents/${a.id}`, "DELETE"))}><Trash2 size={14} /></Button>
@@ -46,6 +52,10 @@ export function Agents() {
         ))}
         {state.agents.length === 0 && <Card className="p-6 text-center text-muted-foreground">No agents yet. Start with the Chief, Dev and Reviewer templates above.</Card>}
       </div>
+
+      <Dialog open={!!term} onClose={() => setTerm(null)} title={term ? `${term.name}: terminal` : ""} wide>
+        {term && <div className="h-[60vh] min-h-[240px]"><TerminalPanel key={term.id} agent={{ id: term.id, name: term.name }} onClose={() => setTerm(null)} /></div>}
+      </Dialog>
 
       <Dialog open={!!edit} onClose={() => setEdit(null)} title={edit?.id ? `Edit ${edit.name}` : "New agent"} wide>
         {edit && (

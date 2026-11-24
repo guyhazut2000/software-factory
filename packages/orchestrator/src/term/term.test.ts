@@ -126,3 +126,11 @@ describe("terminal API", () => {
     expect(reg.list()).toEqual([]);
   }, 20000);
 });
+
+describe("agent shell route", () => {
+  it("POST /api/term/agent/:id returns 409 for an agent that is not running", async () => {
+    const r = await call("POST", "/api/term/agent/nope", {});
+    expect(r.status).toBe(409);
+    expect(r.json.error).toMatch(/not running/);
+  });
+});

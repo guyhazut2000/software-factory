@@ -291,6 +291,11 @@ export class Engine implements FactoryHost, IdeHost {
   }
 
   /* ---------- IDE edit leases ---------- */
+  /** Workspace of the agent's live run (for agent shells), or undefined if it is not running. */
+  agentWorkspace(agentId: string): { ws?: Workspace; agent: Row; task: Row | null } | undefined {
+    for (const a of this.active.values()) if (a.agent.id === agentId) return { ws: a.ws, agent: a.agent, task: a.task };
+    return undefined;
+  }
   runningAgent(taskId: string): string | undefined {
     for (const a of this.active.values()) if (a.task?.id === taskId) return a.agent.name;
     return undefined;

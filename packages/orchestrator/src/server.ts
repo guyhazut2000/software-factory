@@ -63,7 +63,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       return { ok: true };
     }
     if (seg[1] === "ws") return ideRoute(db, method, url, b, engine);
-    if (seg[1] === "term") return termRoute(db, terms, method, url, b, (id) => engine.runningAgent(id));
+    if (seg[1] === "term") return termRoute(db, terms, method, url, b, (id) => engine.runningAgent(id), (id) => engine.agentWorkspace(id));
     if (p === "/api/repos") return gh.listRepos();
     if (p === "/api/sbx/policy" && method === "POST") return applySbxPolicy();
     if (p === "/api/settings" && method === "PUT") {

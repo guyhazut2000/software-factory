@@ -888,6 +888,14 @@ export class Engine implements FactoryHost, IdeHost {
   }
 
   /* ---------- questions ---------- */
+  /** Close an ask without answering (the task stays waiting_for_guy until Guy acts on it). */
+  dismissQuestion(id: string): void {
+    const q = this.db.get("SELECT * FROM questions WHERE id=?", id);
+    if (!q || q.status !== "open") return;
+    this.db.update("questions", id, { status: "dismissed" });
+    this.hub.emitEvent({ type: "questions" });
+  }
+
   async answerQuestion(id: string, answer: string): Promise<void> {
     const q = this.db.get("SELECT * FROM questions WHERE id=?", id);
     if (!q || q.answer) return;

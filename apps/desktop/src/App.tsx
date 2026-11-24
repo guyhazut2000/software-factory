@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { Activity, Bot, Users, Code2, Coins, FolderGit2, HeartPulse, MessageSquare, Moon, OctagonX, Play, Settings as Cog, Sun } from "lucide-react";
+import { Activity, Bot, Inbox as InboxIcon, Users, Code2, Coins, FolderGit2, HeartPulse, MessageSquare, Moon, OctagonX, Play, Settings as Cog, Sun } from "lucide-react";
 import { useStore } from "./lib/store";
 import { api } from "./lib/api";
 import { Badge, Button, Select } from "./components/ui";
@@ -12,6 +12,7 @@ import { Costs } from "./pages/Costs";
 import { Setup } from "./pages/Setup";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ActivityPage } from "./pages/Activity";
+import { Inbox } from "./pages/Inbox";
 import { AgentDrawer } from "./components/AgentDrawer";
 
 // Monaco is heavy: load the IDE (and the editor) only when the tab is opened.
@@ -20,6 +21,7 @@ const Ide = lazy(() => import("./pages/Ide"));
 const TABS = [
   { id: "dashboard", label: "Dashboard", icon: Activity },
   { id: "chief", label: "Chief", icon: MessageSquare },
+  { id: "inbox", label: "Inbox", icon: InboxIcon },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "activity", label: "Activity", icon: Users },
   { id: "ide", label: "IDE", icon: Code2 },
@@ -66,7 +68,7 @@ export function App() {
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)} className={cn("flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm", tab === t.id ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60")}>
               <t.icon size={15} />{t.label}
-              {t.id === "chief" && q > 0 && <Badge tone="warn">{q}</Badge>}
+              {t.id === "inbox" && q > 0 && <Badge tone="warn">{q}</Badge>}
             </button>
           ))}
         </nav>
@@ -88,6 +90,7 @@ export function App() {
         {tab === "dashboard" && <Dashboard goto={(t, arg) => { if (t === "ide") setIdeWs(arg); setTab(t as Tab); }} />}
         {tab === "ide" && <Suspense fallback={<div className="p-8 text-center text-muted-foreground">Loading the editor...</div>}><Ide initial={ideWs} /></Suspense>}
         {tab === "chief" && <Chief />}
+        {tab === "inbox" && <Inbox />}
         {tab === "agents" && <Agents />}
         {tab === "activity" && <ActivityPage />}
         {tab === "projects" && <Projects />}

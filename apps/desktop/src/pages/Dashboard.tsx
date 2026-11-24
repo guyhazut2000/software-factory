@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { openAgent } from "../lib/drawer";
 import { ExternalLink, FileDiff, GitMerge, RotateCw, ScrollText, Square } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api } from "../lib/api";
@@ -67,7 +68,7 @@ export function Dashboard({ goto }: { goto: (t: string, arg?: string) => void })
                   {items.map((t) => (
                     <Card key={t.id} className="p-2.5 text-xs">
                       <div className="font-medium leading-snug">{t.title}</div>
-                      <div className="mt-1 text-muted-foreground">{project(t.project_id)}{t.issue_number ? ` #${t.issue_number}` : ""}{t.assignee_id ? ` / ${agentName(t.assignee_id)}` : ""}</div>
+                      <div className="mt-1 text-muted-foreground">{project(t.project_id)}{t.issue_number ? ` #${t.issue_number}` : ""}{t.assignee_id && <> / <button className="cursor-pointer hover:underline" title="Open the agent drawer" onClick={() => openAgent(t.assignee_id!)}>{agentName(t.assignee_id)}</button></>}</div>
                       {t.note && <div className="mt-1 text-muted-foreground">{t.note}</div>}
                       {t.restart_count > 0 && <Badge tone="warn" className="mt-1">restarts {t.restart_count}</Badge>}
                       <div className="mt-2 flex flex-wrap gap-1">

@@ -12,6 +12,7 @@ import { Costs } from "./pages/Costs";
 import { Setup } from "./pages/Setup";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ActivityPage } from "./pages/Activity";
+import { AgentDrawer } from "./components/AgentDrawer";
 
 // Monaco is heavy: load the IDE (and the editor) only when the tab is opened.
 const Ide = lazy(() => import("./pages/Ide"));
@@ -94,6 +95,7 @@ export function App() {
         {tab === "setup" && <Setup />}
         {tab === "settings" && <SettingsPage />}
       </main>
+      <AgentDrawer gotoIde={(wid) => { setIdeWs(wid); setTab("ide"); }} />
       <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col gap-2">
         {toasts.map((t) => <div key={t.id} className="pointer-events-auto max-w-sm rounded-lg border bg-card px-3 py-2 text-sm shadow-lg">{t.m}</div>)}
       </div>

@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Db } from "./db.js";
@@ -94,6 +95,34 @@ describe("api", () => {
     });
     expect(r).toBe(403);
     await call("DELETE", `/api/projects/${f.id}`);
+  });
+  it("IDE task workspace: diff of a pushed task branch against the default branch", async () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "sf-task-"));
+    const g = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: repo }).toString().trim();
+    g("init", "-q", "-b", "main");
+    writeFileSync(path.join(repo, "app.js"), "v1\n");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    g("update-ref", "refs/remotes/origin/main", "HEAD");
+    g("checkout", "-q", "-b", "sf/5-fix");
+    writeFileSync(path.join(repo, "app.js"), "v2\n");
+    g("commit", "-qam", "fix");
+    g("update-ref", "refs/remotes/origin/sf/5-fix", "HEAD");
+    g("checkout", "-q", "main");
+    db.insert("projects", { id: "gp", name: "demo", kind: "github", repo: "me/ide-demo", root_path: repo, default_branch: "main", created_at: 1 });
+    db.insert("tasks", { id: "tk1", project_id: "gp", source: "github", type: "code", external_ref: "5", title: "Fix", status: "in_review", branch: "sf/5-fix", created_at: 1, updated_at: 1 });
+    const ws = (await call("GET", "/api/ws")).json.find((w: { id: string }) => w.id === "t-tk1");
+    expect(ws).toMatchObject({ kind: "task", ref: "origin/sf/5-fix", read_only: true });
+    expect((await call("GET", "/api/ws/t-tk1/file?path=app.js")).json.content).toBe("v2\n");
+    // checked-out files may be CRLF on Windows (core.autocrlf); blobs from git are LF
+    expect((await call("GET", "/api/ws/p-gp/file?path=app.js")).json.content.replace(/\r\n/g, "\n")).toBe("v1\n");
+    expect((await call("GET", "/api/ws/t-tk1/git/diff?mode=task")).json.files).toEqual([{ status: "M", path: "app.js" }]);
+    const pair = (await call("GET", "/api/ws/t-tk1/git/diff?mode=task&path=app.js")).json;
+    expect([pair.original.content, pair.modified.content]).toEqual(["v1\n", "v2\n"]);
+    expect((await call("GET", "/api/ws/t-tk1/git/diff?mode=unstaged")).status).toBe(400);
+    expect((await call("GET", "/api/ws/t-tk1/git/status")).json.pinned).toBe(true);
+    db.run("DELETE FROM tasks WHERE id='tk1'");
+    db.run("DELETE FROM projects WHERE id='gp'");
   });
   it("agent listener rejects unknown runs", async () => {
     const r = await fetch(`http://127.0.0.1:${srv.agentPort}/mcp/nope`, { method: "POST", body: "{}" });

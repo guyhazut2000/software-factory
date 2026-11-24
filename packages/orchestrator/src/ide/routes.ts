@@ -1,6 +1,7 @@
 import type { Db } from "../db.js";
 import { atRef, disk, gitText, verifyRef } from "./files.js";
 import { HttpError, cleanRel } from "./paths.js";
+import { diffFiles, diffPair, diffSpec, status } from "./gitread.js";
 import { getWorkspace, listWorkspaces, type IdeWorkspace } from "./workspaces.js";
 
 const showSecrets = (db: Db, w: IdeWorkspace) => !!w.project_id && db.getSetting<string[]>("show_secrets", []).includes(w.project_id);
@@ -42,6 +43,29 @@ export async function ideRoute(db: Db, method: string, url: URL, b: Record<strin
     return ref ? atRef.file(w.root, ref, q.get("path"), reveal) : disk.file(w.root, q.get("path"), reveal);
   }
   if (method === "GET" && rest === "git/log") return gitLog(w, await refFor(w, q), q.get("path"), Number(q.get("limit") ?? 50));
+  if (method === "GET" && rest === "git/status") {
+    if (!w.git) throw new HttpError(400, "this workspace is not a git repository");
+    if (w.ref) return { branch: w.ref, detached: false, upstream: null, ahead: 0, behind: 0, changes: [], truncated: false, pinned: true };
+    return status(w.root);
+  }
+  if (method === "GET" && rest === "git/diff") {
+    if (!w.git) throw new HttpError(400, "this workspace is not a git repository");
+    let mode = q.get("mode") ?? "unstaged";
+    let base = q.get("base");
+    let head = q.get("head");
+    let worktree = false;
+    if (mode === "task") {
+      const p = w.project_id ? db.get("SELECT default_branch FROM projects WHERE id=?", w.project_id) : undefined;
+      if (!w.task_id || !p) throw new HttpError(400, "mode=task needs a task workspace");
+      mode = "range";
+      base = `origin/${p.default_branch}`;
+      head = w.ref ?? null;
+      worktree = !w.ref;
+    } else if (w.ref && mode !== "range") throw new HttpError(400, "this workspace is a pushed branch: use mode=task or mode=range");
+    const spec = await diffSpec(w.root, { mode, base, head, worktree });
+    if (!q.get("path")) return { label: spec.label, ...(await diffFiles(w.root, spec)) };
+    return diffPair(w.root, spec, q.get("path"), q.get("orig"), showSecrets(db, w));
+  }
   if (method === "POST" && rest === "show-secrets") {
     if (!w.project_id) throw new HttpError(400, "no project");
     const cur = new Set(db.getSetting<string[]>("show_secrets", []));

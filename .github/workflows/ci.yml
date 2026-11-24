@@ -33,6 +33,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: orchestrator unit tests on this OS (path sandboxing, git parsing)
+        run: pnpm --filter @sf/orchestrator test
       - name: pnpm start in background, then probe
         shell: bash
         env:

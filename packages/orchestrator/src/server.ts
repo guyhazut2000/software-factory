@@ -163,7 +163,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     throw Object.assign(new Error("not found"), { status: 404 });
   }
 
-  const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2" };
+  const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2", ".ttf": "font/ttf" };
   // Same-origin UI for `pnpm start`. The token is injected into index.html, so only serve it to loopback Host headers
   // (blocks DNS-rebinding pages from reading it).
   function serveUi(req: http.IncomingMessage, res: http.ServerResponse, pathname: string) {

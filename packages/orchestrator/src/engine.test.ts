@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { Db } from "./db.js";
 import { Hub } from "./hub.js";
 import { Engine } from "./engine.js";
+import { backfillRoots } from "./projects.js";
+import { repoDirFor } from "./workspace.js";
 
 describe("engine tasks on the unified schema", () => {
   const db = new Db(":memory:");
@@ -24,5 +26,10 @@ describe("engine tasks on the unified schema", () => {
     expect(ids).toHaveLength(2);
     expect(ids).not.toContain("m1");
     expect(ids).not.toContain("c1");
+  });
+  it("backfills root_path for github projects linked before v2", () => {
+    backfillRoots(db);
+    expect(db.get("SELECT root_path FROM projects WHERE id='p1'")?.root_path).toBe(repoDirFor("me/demo"));
+    expect(db.get("SELECT root_path FROM projects WHERE id='f1'")?.root_path).toBe("/tmp");
   });
 });

@@ -39,6 +39,8 @@ jobs:
           SF_NO_OPEN: "1"
           SF_PORT: "47821"
         run: |
+          export SF_DATA_DIR="$RUNNER_TEMP/sfdata"
+          node --experimental-sqlite scripts/ci/seed-v010-db.mjs "$SF_DATA_DIR"
           pnpm start > start.log 2>&1 &
           for i in $(seq 1 90); do
             if curl -sf http://127.0.0.1:47821/ping >/dev/null; then break; fi
@@ -50,7 +52,9 @@ jobs:
           test -n "$TOKEN"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47821/api/health)" = "401"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $TOKEN" http://127.0.0.1:47821/api/health)" = "200"
-          echo "start smoke OK"
+          curl -sf -H "authorization: Bearer $TOKEN" http://127.0.0.1:47821/api/state | tee state.json | grep -q "Seeded v0.1 task"
+          grep -q '"kind":"github"' state.json
+          echo "start smoke OK (v0.1.0 database migrated)"
       - name: second pnpm start reuses the existing build
         shell: bash
         env:

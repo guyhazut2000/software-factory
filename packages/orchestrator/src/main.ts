@@ -7,11 +7,20 @@ import { Engine } from "./engine.js";
 import { startServers } from "./server.js";
 import { dataDir } from "./util.js";
 import { backfillRoots } from "./projects.js";
+import { TaskMirror } from "./taskmirror.js";
 
 const db = new Db(process.env.SF_DB ?? path.join(dataDir(), "factory.db"));
 backfillRoots(db);
 const hub = new Hub();
 const engine = new Engine(db, hub);
+try {
+  engine.mirror = new TaskMirror(db);
+  const { imported } = engine.mirror.importAll();
+  if (imported) console.log(`workspace: re-imported ${imported} task file(s)`);
+} catch (e) {
+  console.error(`workspace repo unavailable: ${(e as Error).message}`);
+  engine.mirror = null;
+}
 const token = (process.env.SF_API_TOKEN ?? "").trim() || crypto.randomBytes(16).toString("hex");
 const uiDir = (process.env.SF_UI_DIR ?? "").trim() || path.join(path.dirname(process.argv[1] ?? "."), "ui");
 const lan = db.getSetting("runner", "sbx") === "sbx" || process.env.SF_AGENT_BIND === "0.0.0.0";
@@ -31,6 +40,7 @@ console.log(`SF_READY ${JSON.stringify({ port: s.apiPort, agentPort: s.agentPort
 
 const quit = () => {
   engine.stop();
+  engine.mirror?.flush();
   s.close();
   process.exit(0);
 };

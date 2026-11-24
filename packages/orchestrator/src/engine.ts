@@ -1,3 +1,4 @@
+import type { TaskMirror } from "./taskmirror.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAdapter, type AgentEvent } from "@sf/adapters";
@@ -66,6 +67,8 @@ export class Engine implements FactoryHost, IdeHost {
   private lastSync = 0;
   private lastPr = 0;
   agentPort = 0;
+  /** Markdown mirror of local tasks in the workspace repo (set in main; optional in tests). */
+  mirror: TaskMirror | null = null;
 
   constructor(public db: Db, public hub: Hub) {
     this.supervisor.cfg = { ...defaultSupervisorConfig };
@@ -243,6 +246,7 @@ export class Engine implements FactoryHost, IdeHost {
   }
   setTask(id: string, patch: Row): void {
     this.db.update("tasks", id, { ...patch, updated_at: now() });
+    this.mirror?.write(id, Object.keys(patch).join(", ") || "update");
     this.hub.emitEvent({ type: "tasks" });
   }
   private async setIssueStatus(project: Row, n: number | null, status: string): Promise<void> {

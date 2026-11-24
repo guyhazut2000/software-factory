@@ -1,4 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
+import { mkdtempSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Db } from "./db.js";
 import { Hub } from "./hub.js";
 import { Engine } from "./engine.js";
@@ -55,6 +58,22 @@ describe("api", () => {
   it("health reports dependencies", async () => {
     const h = (await call("GET", "/api/health")).json as { id: string }[];
     expect(h.map((x) => x.id)).toEqual(expect.arrayContaining(["node", "git", "github", "claude", "codex", "cursor-agent"]));
+  });
+  it("creates folder and none projects without GitHub", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sf-proj-"));
+    const f = await call("POST", "/api/projects", { kind: "folder", root_path: dir });
+    expect(f.status).toBe(200);
+    expect(f.json).toMatchObject({ kind: "folder", repo: null, root_path: realpathSync(dir), name: path.basename(realpathSync(dir)) });
+    expect((await call("POST", "/api/projects", { kind: "folder", root_path: dir })).status).toBe(400);
+    expect((await call("POST", "/api/projects", { kind: "folder", root_path: "relative/x" })).status).toBe(400);
+    expect((await call("POST", "/api/projects", { kind: "folder", root_path: path.join(dir, "missing") })).status).toBe(400);
+    const n = await call("POST", "/api/projects", { kind: "none", name: "Personal" });
+    expect(n.json).toMatchObject({ kind: "none", repo: null, root_path: null, name: "Personal" });
+    expect((await call("POST", "/api/tasks", { project_id: n.json.id, title: "x" })).status).toBe(400);
+    const st = (await call("GET", "/api/state")).json;
+    expect(st.projects.map((p: { kind: string }) => p.kind)).toEqual(expect.arrayContaining(["folder", "none"]));
+    await call("DELETE", `/api/projects/${f.json.id}`);
+    await call("DELETE", `/api/projects/${n.json.id}`);
   });
   it("agent listener rejects unknown runs", async () => {
     const r = await fetch(`http://127.0.0.1:${srv.agentPort}/mcp/nope`, { method: "POST", body: "{}" });

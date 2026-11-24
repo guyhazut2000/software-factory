@@ -29,7 +29,7 @@ export function buildInstructions(project: Row | undefined, agent: Row, skillNam
   if (ctx.allowed_paths?.length) lines.push(`- You may only modify files under: ${ctx.allowed_paths.join(", ")}.`);
   if (skillNames.length) lines.push("", "# Skills", `Skill playbooks are available in .sf/skills/<name>/SKILL.md (Claude loads them automatically): ${skillNames.join(", ")}. Use the matching one for the job.`);
   if (project) {
-    lines.push("", `# Project: ${project.repo}`, `Default branch: ${project.default_branch}.`);
+    lines.push("", `# Project: ${project.repo ?? project.name}`, project.kind === "github" || !project.kind ? `Default branch: ${project.default_branch}.` : `Local ${project.kind} project${project.root_path ? ` at ${project.root_path}` : ""}.`);
     if (project.instructions) lines.push(project.instructions);
   }
   return lines.join("\n");

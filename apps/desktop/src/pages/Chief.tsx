@@ -37,7 +37,7 @@ export function Chief() {
       <Card className="flex min-h-0 flex-col">
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <span className="font-medium">Chat with {chief?.name ?? "the Chief"}</span>
-          <Select className="ml-auto w-56" value={pid} onChange={(e) => setProject(e.target.value)}>{state.projects.length === 0 && <option value="">no project</option>}{state.projects.map((p) => <option key={p.id} value={p.id}>{p.repo}</option>)}</Select>
+          <Select className="ml-auto w-56" value={pid} onChange={(e) => setProject(e.target.value)}>{state.projects.length === 0 && <option value="">no project</option>}{state.projects.map((p) => <option key={p.id} value={p.id}>{p.repo ?? p.name}</option>)}</Select>
         </div>
         <div className="flex-1 space-y-3 overflow-auto p-4">
           {msgs.length === 0 && <div className="text-muted-foreground">Describe what you want built. The Chief splits it into GitHub Issues and the team picks them up. It asks you only when truly blocked.</div>}

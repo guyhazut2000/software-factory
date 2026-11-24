@@ -64,3 +64,23 @@ describe("migrations", () => {
     expect(() => new Db(f)).toThrow(/newer than this app/);
   });
 });
+
+describe("v2 project kinds", () => {
+  it("existing projects become github projects and keep their repo", () => {
+    const f = tmp();
+    const old = new DatabaseSync(f);
+    old.exec(V010);
+    old.close();
+    const db = new Db(f);
+    expect(db.get("SELECT kind, repo FROM projects WHERE id='p1'")).toMatchObject({ kind: "github", repo: "me/demo" });
+    db.close();
+  });
+  it("enforces kind rules", () => {
+    const db = new Db(":memory:");
+    db.insert("projects", { id: "n", name: "Personal", kind: "none", created_at: 1 });
+    db.insert("projects", { id: "f", name: "Data", kind: "folder", root_path: "/tmp", created_at: 1 });
+    expect(() => db.insert("projects", { id: "g", name: "x", kind: "github", created_at: 1 })).toThrow();
+    expect(() => db.insert("projects", { id: "h", name: "x", kind: "folder", created_at: 1 })).toThrow();
+    expect(() => db.insert("projects", { id: "i", name: "x", kind: "bogus", created_at: 1 })).toThrow();
+  });
+});

@@ -140,7 +140,7 @@ export class Engine implements FactoryHost {
       skills: JSON.stringify(m.skills ?? []), mcp: JSON.stringify(m.mcp ?? {}), enabled: m.enabled ? 1 : 0, state: m.enabled ? "idle" : "off", created_at: now(),
     };
     this.db.insert("agents", row);
-    for (const p2 of this.db.all("SELECT repo FROM projects")) void gh.ensureLabel(p2.repo, `agent:${name}`, "c5def5").catch(() => {});
+    for (const p2 of this.db.all("SELECT repo FROM projects WHERE kind='github'")) void gh.ensureLabel(p2.repo, `agent:${name}`, "c5def5").catch(() => {});
     this.hub.emitEvent({ type: "agents" });
     return this.agentView(row);
   }
@@ -229,7 +229,7 @@ export class Engine implements FactoryHost {
     this.hub.emitEvent({ type: "tasks" });
   }
   private async setIssueStatus(project: Row, n: number | null, status: string): Promise<void> {
-    if (!n) return;
+    if (!n || project.kind !== "github" || !project.repo) return;
     try {
       for (const s of ["backlog", "ready", "working", "blocked", "review", "done"]) if (s !== status) await gh.removeLabel(project.repo, n, `status:${s}`);
       await gh.addLabels(project.repo, n, [`status:${status}`]);
@@ -249,7 +249,7 @@ export class Engine implements FactoryHost {
 
   async syncIssues(): Promise<void> {
     if (!(await getToken())) return;
-    for (const p of this.db.all("SELECT * FROM projects")) {
+    for (const p of this.db.all("SELECT * FROM projects WHERE kind='github'")) {
       try {
         for (const i of await gh.listIssues(p.repo, "status:ready")) {
           if (i.pull_request) continue;
@@ -281,7 +281,7 @@ export class Engine implements FactoryHost {
   async mergeTask(id: string): Promise<void> {
     const t = this.db.get("SELECT * FROM tasks WHERE id=?", id);
     const p = t && this.db.get("SELECT * FROM projects WHERE id=?", t.project_id);
-    if (!t || !p || !t.pr_number) throw new Error("Task has no PR");
+    if (!t || !p || !t.pr_number || p.kind !== "github") throw new Error("Task has no PR");
     await gh.mergePr(p.repo, t.pr_number);
     this.setTask(id, { status: "done", note: "Merged by Guy" });
     await this.setIssueStatus(p, t.issue_number, "done");
@@ -404,6 +404,7 @@ export class Engine implements FactoryHost {
     this.log(act, "system", `${agent.name} starts "${task.title}" (${agent.provider}/${agent.model}, ${this.settings().runner})`);
     try {
       if (!project) throw new Error("Project not found");
+      if (project.kind !== "github") throw new Error(`Agents cannot run on ${project.kind} projects yet (planned in M9)`);
       if (task.kind === "review") await this.runReview(act, project);
       else await this.runDev(act, project);
     } catch (e) {
@@ -663,11 +664,12 @@ export class Engine implements FactoryHost {
     this.setState(chief.id, "assign");
     try {
       let cwd = path.join(dataDir(), "chief");
-      if (project) cwd = await ensureBaseClone(project.repo, project.default_branch).catch(() => cwd);
+      if (project?.kind === "github") cwd = await ensureBaseClone(project.repo, project.default_branch).catch(() => cwd);
+      else if (project?.kind === "folder" && project.root_path) cwd = project.root_path;
       mkdirSync(cwd, { recursive: true });
       const hist = this.db.all("SELECT * FROM messages WHERE channel='chat' AND COALESCE(project_id,'')=COALESCE(?,'') ORDER BY created_at DESC LIMIT ?", projectId, Math.max(2, Math.min(40, chief.context.history_size ?? 12))).reverse();
       const prompt = [
-        project ? `Active project: ${project.repo} (project_id=${project.id}). Use this project_id with create_issue.` : "No project is selected. Ask Guy to pick one before creating issues.",
+        project ? `Active project: ${project.repo ?? project.name} (${project.kind}, project_id=${project.id}).${project.kind === "github" ? " Use this project_id with create_issue." : " This project has no GitHub repo, so create_issue is not available for it."}` : "No project is selected. Ask Guy to pick one before creating issues.",
         "Conversation so far:",
         ...hist.slice(0, -1).map((m) => `${m.from_id === null ? "Guy" : "Chief"}: ${m.body}`),
         `Guy: ${text}`,
@@ -742,6 +744,7 @@ export class Engine implements FactoryHost {
     const pid = args.project_id ?? a.task?.project_id;
     const p = pid && this.db.get("SELECT * FROM projects WHERE id=?", pid);
     if (!p) throw new Error("Unknown project_id");
+    if (p.kind !== "github") throw new Error(`Project ${p.name} is a ${p.kind} project with no GitHub repo`);
     const labels = [...(args.labels ?? []), "status:ready", ...(args.agent ? [`agent:${args.agent}`] : [])];
     const issue = await gh.createIssue(p.repo, args.title, args.body, labels);
     await this.createTaskFromIssue(p, issue.number, args.title, args.body, labels);

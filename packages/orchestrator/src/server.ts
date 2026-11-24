@@ -7,7 +7,8 @@ import { handleMcp } from "./mcp.js";
 import { healthChecks } from "./health.js";
 import { TEMPLATES } from "./templates.js";
 import { bootstrapLabels, getToken, gh, setToken } from "./github.js";
-import { ensureBaseClone, applySbxPolicy } from "./workspace.js";
+import { ensureBaseClone, applySbxPolicy, repoDirFor } from "./workspace.js";
+import { newLocalProject } from "./projects.js";
 import { now, uid } from "./util.js";
 
 type J = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -71,6 +72,13 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       engine.resumeAll();
       return { ok: true };
     }
+    if (p === "/api/projects" && method === "POST" && (b.kind === "folder" || b.kind === "none")) {
+      const row = newLocalProject(b);
+      if (row.root_path && db.get("SELECT 1 AS x FROM projects WHERE root_path=? AND kind='folder'", row.root_path)) throw new Error("That folder is already a project");
+      db.insert("projects", row);
+      hub.emitEvent({ type: "projects" });
+      return row;
+    }
     if (p === "/api/projects" && method === "POST") {
       let repo = b.repo as string | undefined;
       let r;
@@ -80,7 +88,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       repo = r.full_name;
       const ex = db.get("SELECT * FROM projects WHERE repo=?", repo);
       if (ex) return ex;
-      const row = { id: uid(), name: repo.split("/")[1], repo, default_branch: r.default_branch, instructions: "", created_at: now() };
+      const row = { id: uid(), name: repo.split("/")[1], kind: "github", repo, root_path: repoDirFor(repo), default_branch: r.default_branch, instructions: "", created_at: now() };
       db.insert("projects", row);
       hub.emitEvent({ type: "projects" });
       void bootstrapLabels(repo, engine.listAgents().map((a) => a.name)).catch((e) => console.error("labels", String(e)));
@@ -100,6 +108,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       }
       if (act === "labels") {
         const pr = db.get("SELECT * FROM projects WHERE id=?", id);
+        if (pr?.kind !== "github") throw new Error("Labels only apply to GitHub projects");
         await bootstrapLabels(pr!.repo, engine.listAgents().map((a) => a.name));
         return { ok: true };
       }
@@ -118,6 +127,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     if (p === "/api/tasks" && method === "POST") {
       const pr = db.get("SELECT * FROM projects WHERE id=?", b.project_id);
       if (!pr) throw new Error("project not found");
+      if (pr.kind !== "github") throw new Error("Tasks on folder/none projects arrive with local tasks (M5)");
       const labels = ["status:ready", ...(b.agent ? [`agent:${b.agent}`] : [])];
       const issue = await gh.createIssue(pr.repo, b.title, b.body ?? "", labels);
       return engine.createTaskFromIssue(pr, issue.number, b.title, b.body ?? "", labels);

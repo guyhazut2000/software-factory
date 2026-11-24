@@ -46,6 +46,22 @@ export type Migration = { version: number; name: string; up: (db: Db) => void };
 export const MIGRATIONS: Migration[] = [
   // v1: baseline. Uses IF NOT EXISTS so existing v0.1.0 databases (which have no schema_migrations table) adopt it as-is.
   { version: 1, name: "baseline", up: (db) => db.exec(BASELINE) },
+  // v2: project kinds. SQLite cannot drop NOT NULL in place, so rebuild `projects` (repo becomes nullable).
+  {
+    version: 2,
+    name: "project_kinds",
+    up: (db) =>
+      db.exec(`
+CREATE TABLE projects_v2 (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'github' CHECK (kind IN ('github','folder','none')),
+  repo TEXT UNIQUE, root_path TEXT, default_branch TEXT NOT NULL DEFAULT 'main',
+  instructions TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
+  CHECK (kind <> 'github' OR repo IS NOT NULL), CHECK (kind <> 'folder' OR root_path IS NOT NULL));
+INSERT INTO projects_v2 (id,name,kind,repo,root_path,default_branch,instructions,created_at)
+  SELECT id,name,'github',repo,NULL,default_branch,instructions,created_at FROM projects;
+DROP TABLE projects;
+ALTER TABLE projects_v2 RENAME TO projects;`),
+  },
 ];
 
 export class Db {

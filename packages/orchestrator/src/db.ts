@@ -8,8 +8,8 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof
 
 export type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-const DDL = `
-PRAGMA journal_mode = WAL;
+/** Baseline schema (v1) = the schema shipped in v0.1.0. Never edit; add a migration instead. */
+const BASELINE = `
 CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, repo TEXT NOT NULL UNIQUE, default_branch TEXT NOT NULL DEFAULT 'main',
@@ -40,12 +40,55 @@ CREATE TABLE IF NOT EXISTS costs (
   output_tokens INTEGER NOT NULL DEFAULT 0, usd REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
 `;
 
+export type Migration = { version: number; name: string; up: (db: Db) => void };
+
+/** Ordered schema migrations. Append only; each runs once inside a transaction. */
+export const MIGRATIONS: Migration[] = [
+  // v1: baseline. Uses IF NOT EXISTS so existing v0.1.0 databases (which have no schema_migrations table) adopt it as-is.
+  { version: 1, name: "baseline", up: (db) => db.exec(BASELINE) },
+];
+
 export class Db {
   private d: DB;
-  constructor(file: string) {
+  constructor(file: string, migrations: Migration[] = MIGRATIONS) {
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
     this.d = new DatabaseSync(file);
-    this.d.exec(DDL);
+    this.d.exec("PRAGMA journal_mode = WAL;");
+    this.migrate(migrations);
+  }
+  exec(sql: string): void {
+    this.d.exec(sql);
+  }
+  /** Current schema version (0 = empty database). */
+  version(): number {
+    return (this.get("SELECT MAX(version) AS v FROM schema_migrations")?.v as number | null) ?? 0;
+  }
+  /** Apply pending migrations in order, each atomically. Refuses a database newer than this build. */
+  migrate(migrations: Migration[]): void {
+    this.d.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+    const sorted = [...migrations].sort((a, b) => a.version - b.version);
+    const cur = this.version();
+    const latest = sorted.at(-1)?.version ?? 0;
+    if (cur > latest) throw new Error(`Database schema v${cur} is newer than this app (v${latest}). Update Software Factory.`);
+    for (const m of sorted) {
+      if (m.version <= cur) continue;
+      this.d.exec("BEGIN");
+      try {
+        m.up(this);
+        this.run("INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)", m.version, m.name, Date.now());
+        this.d.exec("COMMIT");
+      } catch (e) {
+        this.d.exec("ROLLBACK");
+        throw new Error(`Migration ${m.version} (${m.name}) failed: ${(e as Error).message}`);
+      }
+    }
+  }
+  /** True if `table` has `column` (for idempotent ALTERs). */
+  hasColumn(table: string, column: string): boolean {
+    return this.all(`PRAGMA table_info(${table})`).some((c) => c.name === column);
+  }
+  close(): void {
+    this.d.close();
   }
   all(sql: string, ...p: unknown[]): Row[] {
     return this.d.prepare(sql).all(...(p as never[])) as Row[];

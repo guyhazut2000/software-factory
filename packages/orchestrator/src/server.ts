@@ -164,6 +164,14 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     }
     if (p === "/api/logs") return db.all("SELECT e.*, r.agent_id, r.task_id FROM events e JOIN runs r ON r.id=e.run_id ORDER BY e.id DESC LIMIT 200").reverse();
     if (p === "/api/messages") return db.all("SELECT * FROM messages WHERE (channel=? ) AND COALESCE(project_id,'')=COALESCE(?,'') ORDER BY created_at DESC LIMIT 100", url.searchParams.get("channel") ?? "chat", url.searchParams.get("project_id") || null).reverse();
+    if (p === "/api/threads" && method === "GET") {
+      const pid = url.searchParams.get("project_id");
+      return pid === null
+        ? db.all("SELECT * FROM threads ORDER BY created_at DESC LIMIT 200")
+        : db.all("SELECT * FROM threads WHERE COALESCE(project_id,'')=COALESCE(?,'') ORDER BY created_at DESC LIMIT 200", pid || null);
+    }
+    if (seg[1] === "threads" && id && act === "messages" && method === "GET")
+      return db.all("SELECT * FROM messages WHERE thread_id=? ORDER BY created_at DESC LIMIT 200", id).reverse();
     if (p === "/api/bus") return db.all("SELECT * FROM messages WHERE channel='bus' ORDER BY created_at DESC LIMIT 100").reverse();
     if (p === "/api/chat" && method === "POST") {
       void engine.chat(b.project_id ?? null, String(b.text));

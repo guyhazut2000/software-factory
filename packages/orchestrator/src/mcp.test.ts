@@ -12,7 +12,7 @@ describe("factory MCP", () => {
   });
   it("dispatches tool calls", async () => {
     const r = (await handleMcp(host, "r", { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "ask_guy", arguments: { question: "q?" } } })) as { result: { content: { text: string }[] } };
-    expect(r.result.content[0].text).toBe("askGuy:2");
+    expect(r.result.content[0].text).toBe("askGuy:3");
   });
   it("returns null for notifications and errors for unknown", async () => {
     expect(await handleMcp(host, "r", { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();

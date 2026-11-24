@@ -14,7 +14,7 @@ import { gh, getToken } from "./github.js";
 import { aheadCount, commitAllIfDirty, git } from "./git.js";
 import { createSbx, createWorktree, removeSbx, sandboxNameFor, ensureBaseClone, skillFiles, type Workspace } from "./workspace.js";
 import { formatFindings, runScanners } from "./scanners.js";
-import type { FactoryHost } from "./mcp.js";
+import { ASK_KINDS, type AskKind, type FactoryHost } from "./mcp.js";
 import { dataDir, now, slug, uid, which, stream } from "./util.js";
 import { HttpError } from "./ide/paths.js";
 import { taskWorktreeDir } from "./ide/workspaces.js";
@@ -772,14 +772,26 @@ export class Engine implements FactoryHost, IdeHost {
     }
   }
 
+  /* ---------- threads ---------- */
+  /** The project's main channel with the Chief (one per project; project_id null = global). Created on first use. */
+  chiefThread(projectId: string | null): string {
+    const t = this.db.get("SELECT id FROM threads WHERE kind='chief' AND COALESCE(project_id,'')=COALESCE(?,'') ORDER BY created_at LIMIT 1", projectId);
+    if (t) return t.id as string;
+    const id = uid();
+    const chief = this.db.get("SELECT id FROM agents WHERE role='chief' ORDER BY created_at LIMIT 1");
+    this.db.insert("threads", { id, agent_id: chief?.id ?? null, project_id: projectId, title: "Chief", kind: "chief", created_at: now() });
+    return id;
+  }
+
   /* ---------- chief chat ---------- */
   async chat(projectId: string | null, text: string): Promise<void> {
     const chief = this.listAgents().find((a) => a.role === "chief" && a.enabled);
+    const threadId = this.chiefThread(projectId);
     const mid = uid();
-    this.db.insert("messages", { id: mid, channel: "chat", project_id: projectId, from_id: null, to_id: chief?.id ?? null, body: text, created_at: now() });
+    this.db.insert("messages", { id: mid, channel: "chat", thread_id: threadId, project_id: projectId, from_id: null, to_id: chief?.id ?? null, body: text, created_at: now() });
     this.hub.emitEvent({ type: "messages" });
     const reply = (body: string) => {
-      this.db.insert("messages", { id: uid(), channel: "chat", project_id: projectId, from_id: chief?.id ?? "system", to_id: null, body, created_at: now() });
+      this.db.insert("messages", { id: uid(), channel: "chat", thread_id: threadId, project_id: projectId, from_id: chief?.id ?? "system", to_id: null, body, created_at: now() });
       this.hub.emitEvent({ type: "messages" });
     };
     if (!chief) return reply("No Chief agent is enabled. Open the Agents tab, add the Chief template and switch it on.");
@@ -836,8 +848,8 @@ export class Engine implements FactoryHost, IdeHost {
   async answerQuestion(id: string, answer: string): Promise<void> {
     const q = this.db.get("SELECT * FROM questions WHERE id=?", id);
     if (!q || q.answer) return;
-    this.db.update("questions", id, { answer, answered_at: now() });
-    this.db.insert("messages", { id: uid(), channel: "chat", task_id: q.task_id, project_id: q.project_id, from_id: null, to_id: q.agent_id, body: `(answer) ${answer}`, created_at: now() });
+    this.db.update("questions", id, { answer, answered_at: now(), status: "answered" });
+    this.db.insert("messages", { id: uid(), channel: "chat", thread_id: q.thread_id ?? this.chiefThread(q.project_id), task_id: q.task_id, project_id: q.project_id, from_id: null, to_id: q.agent_id, body: `(answer) ${answer}`, created_at: now() });
     if (q.task_id) {
       const t = this.db.get("SELECT * FROM tasks WHERE id=?", q.task_id);
       if (t && t.status === "waiting_for_guy" && !t.lease) this.setTask(t.id, { status: "queued", note: "Answered, resuming" });
@@ -882,11 +894,14 @@ export class Engine implements FactoryHost, IdeHost {
     this.log(a, "system", `created issue #${issue.number}: ${args.title}`);
     return `Created issue #${issue.number} ${issue.html_url}`;
   }
-  async askGuy(runId: string, question: string): Promise<string> {
+  async askGuy(runId: string, question: string, opts: { kind?: AskKind; options?: string[] } = {}): Promise<string> {
     const a = this.act(runId);
     const id = uid();
-    this.db.insert("questions", { id, task_id: a.task?.id ?? null, agent_id: a.agent.id, project_id: a.task?.project_id ?? null, body: question, asked_at: now() });
-    this.db.insert("messages", { id: uid(), channel: "chat", task_id: a.task?.id ?? null, from_id: a.agent.id, to_id: null, project_id: a.task?.project_id ?? null, body: `(question) ${question}`, created_at: now() });
+    const kind: AskKind = opts.kind && ASK_KINDS.includes(opts.kind) ? opts.kind : "question";
+    const options = Array.isArray(opts.options) && opts.options.length ? JSON.stringify(opts.options.map(String).slice(0, 8)) : null;
+    const threadId = this.chiefThread(a.task?.project_id ?? null);
+    this.db.insert("questions", { id, task_id: a.task?.id ?? null, agent_id: a.agent.id, project_id: a.task?.project_id ?? null, body: question, asked_at: now(), kind, options, thread_id: threadId });
+    this.db.insert("messages", { id: uid(), channel: "chat", thread_id: threadId, task_id: a.task?.id ?? null, from_id: a.agent.id, to_id: null, project_id: a.task?.project_id ?? null, body: `(question) ${question}`, created_at: now() });
     a.control = { kind: "ask", reason: question };
     this.log(a, "question", question);
     this.notify(`${a.agent.name} needs you`, question.slice(0, 140));

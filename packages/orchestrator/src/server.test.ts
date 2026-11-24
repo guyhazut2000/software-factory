@@ -206,6 +206,24 @@ describe("api", () => {
       db.run("DELETE FROM projects WHERE id='mp'");
     }
   });
+  it("threads: chat lands in one chief thread per project; asks carry kind/options/thread", async () => {
+    await call("POST", "/api/chat", { project_id: "thr", text: "hello" });
+    await call("POST", "/api/chat", { project_id: "thr", text: "again" });
+    const threads = (await call("GET", "/api/threads?project_id=thr")).json;
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({ kind: "chief", project_id: "thr" });
+    const msgs = (await call("GET", `/api/threads/${threads[0].id}/messages`)).json as { body: string }[];
+    expect(msgs.map((m) => m.body)).toEqual(expect.arrayContaining(["hello", "again"]));
+    const agent = { id: "ag1", name: "Dev" } as never;
+    engine.active.set("run-ask", { runId: "run-ask", agent, task: { id: "tk", project_id: "thr" } as never, lastText: "", errTail: [], tokens: 0, startedAt: 0 } as never);
+    await engine.askGuy("run-ask", "Deploy?", { kind: "approval", options: ["yes", "no"] });
+    engine.active.delete("run-ask");
+    const q = db.get("SELECT * FROM questions WHERE agent_id='ag1'")!;
+    expect(q).toMatchObject({ kind: "approval", options: '["yes","no"]', thread_id: threads[0].id, status: "open" });
+    await engine.answerQuestion(q.id, "yes");
+    expect(db.get("SELECT status FROM questions WHERE id=?", q.id)!.status).toBe("answered");
+    expect(db.get("SELECT thread_id FROM messages WHERE body='(answer) yes'")!.thread_id).toBe(threads[0].id);
+  });
   it("agent listener rejects unknown runs", async () => {
     const r = await fetch(`http://127.0.0.1:${srv.agentPort}/mcp/nope`, { method: "POST", body: "{}" });
     expect(r.status).toBe(404);

@@ -11,7 +11,7 @@ import { TEMPLATES, ROLE_SKILLS } from "./templates.js";
 import { buildInstructions } from "./instructions.js";
 import { gh, getToken } from "./github.js";
 import { aheadCount, commitAllIfDirty, git } from "./git.js";
-import { createSbx, createWorktree, ensureBaseClone, skillFiles, type Workspace } from "./workspace.js";
+import { createSbx, createWorktree, removeSbx, sandboxNameFor, ensureBaseClone, skillFiles, type Workspace } from "./workspace.js";
 import { formatFindings, runScanners } from "./scanners.js";
 import type { FactoryHost } from "./mcp.js";
 import { dataDir, now, slug, uid, which, stream } from "./util.js";
@@ -137,7 +137,7 @@ export class Engine implements FactoryHost, IdeHost {
     const taken = new Set(this.db.all("SELECT name FROM agents").map((r) => r.name));
     for (let i = 2; taken.has(name); i++) name = `${m.name}-${i}`;
     const row: Row = {
-      id: uid(), name, role: m.role ?? "developer", description: m.description ?? "", provider: m.provider ?? "claude-code", model: m.model ?? "sonnet",
+      id: uid(), name, role: m.role ?? "developer", description: m.description ?? "", instructions: String(m.instructions ?? ""), provider: m.provider ?? "claude-code", model: m.model ?? "sonnet",
       effort: m.effort ?? "medium", context: JSON.stringify(m.context ?? {}), permissions: JSON.stringify(m.permissions ?? ["open_pr"]),
       token_budget: m.token_budget ?? null, max_runtime_sec: m.max_runtime_sec ?? 1800, cpu: m.cpu ?? 2, ram_mb: m.ram_mb ?? 4096,
       skills: JSON.stringify(m.skills ?? []), mcp: JSON.stringify(m.mcp ?? {}), enabled: m.enabled ? 1 : 0, state: m.enabled ? "idle" : "off", created_at: now(),
@@ -149,7 +149,7 @@ export class Engine implements FactoryHost, IdeHost {
   }
   updateAgent(id: string, p: Row): Row {
     const patch: Row = {};
-    for (const k of ["name", "role", "description", "provider", "model", "effort", "token_budget", "max_runtime_sec", "cpu", "ram_mb"]) if (k in p) patch[k] = p[k];
+    for (const k of ["name", "role", "description", "provider", "model", "effort", "token_budget", "max_runtime_sec", "cpu", "ram_mb", "instructions"]) if (k in p) patch[k] = p[k];
     for (const k of ["context", "permissions", "skills", "mcp"]) if (k in p) patch[k] = JSON.stringify(p[k]);
     this.db.update("agents", id, patch);
     this.hub.emitEvent({ type: "agents" });
@@ -166,6 +166,20 @@ export class Engine implements FactoryHost, IdeHost {
     if (!on) this.killAgent(id, { kind: "stop", reason: "agent switched off" });
     this.db.update("agents", id, { enabled: on ? 1 : 0, state: on ? (a.state === "off" ? "idle" : a.state) : "off" });
     this.hub.emitEvent({ type: "agents" });
+  }
+  /**
+   * Recreate the agent's sandbox so new CPU/RAM settings apply (sbx sizes a VM only at create time).
+   * Running: restart the run with a fresh sandbox. Idle with a task: remove the sandbox; the next run recreates it.
+   */
+  async recreateSandbox(id: string): Promise<{ ok: true; sandbox: string; action: "restarted" | "removed" }> {
+    const agent = this.db.get("SELECT * FROM agents WHERE id=?", id);
+    if (!agent) throw new HttpError(404, "agent not found");
+    const taskId = agent.current_task_id as string | null;
+    if (!taskId) throw new HttpError(409, "agent has no task, so no sandbox to recreate");
+    const name = sandboxNameFor(taskId);
+    if (this.killAgent(id, { kind: "restart", reason: "recreate sandbox", fresh: true })) return { ok: true, sandbox: name, action: "restarted" };
+    await removeSbx(name);
+    return { ok: true, sandbox: name, action: "removed" };
   }
   restartAgent(id: string): void {
     if (!this.killAgent(id, { kind: "restart", reason: "manual restart", fresh: true })) {
@@ -547,7 +561,7 @@ export class Engine implements FactoryHost, IdeHost {
     if (set.runner === "worktree" && !set.allow_worktree) throw new Error("Docker Sandboxes are selected but the unsafe worktree fallback is off. Set up sbx (Setup tab) or enable the fallback in Settings.");
     this.log(act, "system", set.runner === "sbx" ? "creating sandbox (clone mode)..." : "WARNING: running WITHOUT isolation (git worktree fallback)");
     const ws = set.runner === "sbx"
-      ? await createSbx({ repo: project.repo, base: project.default_branch, branch, taskId: task!.id, sbxAgent: adapter.sbxAgent, fresh })
+      ? await createSbx({ repo: project.repo, base: project.default_branch, branch, taskId: task!.id, sbxAgent: adapter.sbxAgent, fresh, cpu: agent.cpu, ramMb: agent.ram_mb })
       : await createWorktree(project.repo, project.default_branch, branch, task!.id);
     act.ws = ws;
     this.setTask(task!.id, { branch });

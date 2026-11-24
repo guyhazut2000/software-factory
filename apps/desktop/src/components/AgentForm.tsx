@@ -21,6 +21,7 @@ export function AgentForm({ value, onChange, onSave, onCancel }: { value: Partia
               <div className="col-span-2"><Label hint="(run the CLI's model list to see valid names)">Model</Label><Input list="models" value={value.model ?? ""} onChange={(e) => set("model", e.target.value)} /><datalist id="models">{(MODELS[value.provider ?? "claude-code"] ?? []).map((m) => <option key={m}>{m}</option>)}</datalist></div>
             </div>
             <div><Label hint="(becomes the system prompt)">Description</Label><Textarea rows={4} value={value.description ?? ""} onChange={(e) => set("description", e.target.value)} /></div>
+            <div><Label hint="(role file: appended to the system prompt on every run; keep it short)">Role instructions</Label><Textarea rows={6} placeholder="e.g. Prefer small PRs. Always add a unit test. Never touch infra/." value={value.instructions ?? ""} onChange={(e) => set("instructions", e.target.value)} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label hint="(comma separated)">Instruction files</Label><Input placeholder="AGENTS.md, CLAUDE.md" value={(value.context?.files ?? []).join(", ")} onChange={(e) => set("context", { ...value.context, files: csv(e.target.value) })} /></div>
               <div><Label hint="(comma separated, empty = whole repo)">Allowed paths</Label><Input placeholder="src/, tests/" value={(value.context?.allowed_paths ?? []).join(", ")} onChange={(e) => set("context", { ...value.context, allowed_paths: csv(e.target.value) })} /></div>

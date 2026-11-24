@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { agentLogs, agentMessages, clampWidth, DRAWER_MIN, DRAWER_TABS, onOpenAgent, openAgent, taskWorkspace } from "./drawer";
+import { agentLogs, agentMessages, clampWidth, DRAWER_MIN, DRAWER_TABS, onOpenAgent, openAgent, recreateHint, taskWorkspace } from "./drawer";
 import type { LogEvent, Message } from "./types";
 
 describe("agent drawer helpers", () => {
@@ -33,5 +33,11 @@ describe("agent drawer helpers", () => {
     openAgent("a2");
     expect(fn).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledWith({ id: "a1", tab: "diff" });
+  });
+  it("explains what recreate sandbox will do", () => {
+    const a = { cpu: 4, ram_mb: 8192 };
+    expect(recreateHint({ ...a, current_task_id: null, state: "idle" })).toMatch(/No task/);
+    expect(recreateHint({ ...a, current_task_id: "t1", state: "running" })).toMatch(/Restarts.*4 CPU \/ 8192 MB/);
+    expect(recreateHint({ ...a, current_task_id: "t1", state: "idle" })).toMatch(/Removes/);
   });
 });

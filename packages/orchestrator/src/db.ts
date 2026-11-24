@@ -90,6 +90,8 @@ CREATE INDEX tasks_ref ON tasks(project_id, source, external_ref);`),
   },
   // v4: IDE edit leases. `lease='guy'` = Guy took over the task's workspace; agents skip it until hand-back.
   { version: 4, name: "edit_leases", up: (db) => db.exec("ALTER TABLE tasks ADD COLUMN lease TEXT") },
+  // v5: per-agent role/instructions text (appended to the generated system prompt).
+  { version: 5, name: "agent_instructions", up: (db) => db.exec("ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''") },
 ];
 
 export class Db {

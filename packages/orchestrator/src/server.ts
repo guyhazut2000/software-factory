@@ -130,6 +130,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       if (method === "DELETE") return engine.deleteAgent(id), { ok: true };
       if (act === "toggle") return engine.setEnabled(id, !!b.on), { ok: true };
       if (act === "restart") return engine.restartAgent(id), { ok: true };
+      if (act === "recreate-sandbox" && method === "POST") return engine.recreateSandbox(id);
       if (act === "clone") {
         const a = engine.listAgents().find((x) => x.id === id)!;
         return engine.createAgent({ ...a, name: `${a.name} copy`, enabled: false, id: undefined });

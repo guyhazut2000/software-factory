@@ -5,7 +5,8 @@ export interface Agent {
   skills: string[]; mcp: { github?: boolean; filesystem?: boolean };
   enabled: boolean; state: string; current_task_id: string | null; tokens_today: number; usd_today: number;
 }
-export interface Project { id: string; name: string; repo: string; default_branch: string; instructions: string }
+export interface Project { id: string; name: string; kind: "github" | "folder" | "none"; repo: string | null; root_path: string | null; default_branch: string; instructions: string }
+export const projectLabel = (p: Pick<Project, "repo" | "name">) => p.repo ?? p.name;
 export interface Task {
   id: string; project_id: string; issue_number: number | null; title: string; body: string; status: string;
   assignee_id: string | null; branch: string | null; pr_number: number | null; pr_url: string | null; summary: string; note: string;

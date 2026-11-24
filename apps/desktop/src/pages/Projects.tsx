@@ -3,7 +3,7 @@ import { Github, Lock, Plus, Tags, Trash2 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api, inTauri, tauri } from "../lib/api";
 import { Badge, Button, Card, Dialog, Input, Label, Select, Textarea } from "../components/ui";
-import type { Project } from "../lib/types";
+import { projectLabel, type Project } from "../lib/types";
 
 interface Repo { full_name: string; private: boolean; description: string | null }
 
@@ -48,11 +48,11 @@ export function Projects() {
         <div className="grid gap-2">
           {state.projects.map((p) => (
             <Card key={p.id} className="flex items-center gap-3 p-3">
-              <div className="min-w-0 flex-1"><div className="font-medium">{p.repo}</div><div className="text-xs text-muted-foreground">{state.tasks.filter((t) => t.project_id === p.id).length} tasks / branch {p.default_branch}</div></div>
-              <Button size="sm" onClick={() => setNewTask({ project: p, title: "", body: "", agent: "" })}><Plus size={13} />Task</Button>
+              <div className="min-w-0 flex-1"><div className="font-medium">{projectLabel(p)} {p.kind !== "github" && <Badge>{p.kind}</Badge>}</div><div className="text-xs text-muted-foreground">{state.tasks.filter((t) => t.project_id === p.id).length} tasks{p.kind === "github" ? ` / branch ${p.default_branch}` : p.root_path ? ` / ${p.root_path}` : ""}</div></div>
+              {p.kind === "github" && <Button size="sm" onClick={() => setNewTask({ project: p, title: "", body: "", agent: "" })}><Plus size={13} />Task</Button>}
               <Button size="sm" variant="outline" onClick={() => setEditing(p)}>Instructions</Button>
-              <Button size="icon" variant="ghost" title="Create status:* and agent:* labels" onClick={() => wrap(() => api(`/api/projects/${p.id}/labels`, "POST", {}))}><Tags size={14} /></Button>
-              <Button size="icon" variant="ghost" title="Unlink" onClick={() => confirm(`Unlink ${p.repo}? (The repo is untouched)`) && wrap(() => api(`/api/projects/${p.id}`, "DELETE"))}><Trash2 size={14} /></Button>
+              {p.kind === "github" && <Button size="icon" variant="ghost" title="Create status:* and agent:* labels" onClick={() => wrap(() => api(`/api/projects/${p.id}/labels`, "POST", {}))}><Tags size={14} /></Button>}
+              <Button size="icon" variant="ghost" title="Unlink" onClick={() => confirm(`Unlink ${projectLabel(p)}? (${p.kind === "github" ? "The repo" : "The folder"} is untouched)`) && wrap(() => api(`/api/projects/${p.id}`, "DELETE"))}><Trash2 size={14} /></Button>
             </Card>
           ))}
           {state.projects.length === 0 && <Card className="p-6 text-center text-muted-foreground">No projects linked yet. Browse your repos or create a new one.</Card>}
@@ -76,13 +76,13 @@ export function Projects() {
         </div>
       </Dialog>
 
-      <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Instructions: ${editing?.repo}`} wide>
+      <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Instructions: ${editing ? projectLabel(editing) : ""}`} wide>
         <div className="mb-2 text-xs text-muted-foreground">Extra instructions appended to every agent's system prompt for this project (build commands, conventions, no-go areas). Keep it short: it costs tokens on every run.</div>
         <Textarea rows={10} value={editing?.instructions ?? ""} onChange={(e) => setEditing(editing && { ...editing, instructions: e.target.value })} />
         <div className="mt-3 flex justify-end gap-2"><Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button><Button onClick={() => wrap(async () => { await api(`/api/projects/${editing!.id}`, "PUT", { instructions: editing!.instructions }); setEditing(null); })}>Save</Button></div>
       </Dialog>
 
-      <Dialog open={!!newTask} onClose={() => setNewTask(null)} title={`New task in ${newTask?.project.repo}`}>
+      <Dialog open={!!newTask} onClose={() => setNewTask(null)} title={`New task in ${newTask ? projectLabel(newTask.project) : ""}`}>
         {newTask && (
           <div className="grid gap-3">
             <div className="text-xs text-muted-foreground">Creates a GitHub Issue labelled <code>status:ready</code>; an idle developer agent picks it up. Or just ask the Chief.</div>

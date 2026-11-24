@@ -59,6 +59,7 @@ export default function Ide({ initial }: { initial?: string }) {
         </Select>
         {ws?.read_only && <Badge title={ws.note}><Lock size={11} />read-only</Badge>}
         {ws?.ref && <Badge tone="primary"><GitBranch size={11} />{ws.ref}</Badge>}
+        {ws?.kind === "mine" && !ws.exists && <Button size="sm" onClick={() => api<IdeWorkspace>(`/api/ws/${ws.id}/create`, "POST", {}).then((w) => { setWs(w); loadList(); setRev((r) => r + 1); }).catch((e) => toast(String(e.message)))}>Create my workspace</Button>}
         {ws?.note && <span className="truncate text-xs text-muted-foreground">{ws.note}</span>}
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant="ghost" onClick={toggleSecrets} title="Show .env, keys and certificates in this project">{ws?.show_secrets ? <Eye size={13} /> : <EyeOff size={13} />}secrets</Button>

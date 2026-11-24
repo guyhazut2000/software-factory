@@ -3,7 +3,7 @@ import { atRef, disk, gitText, verifyRef } from "./files.js";
 import { HttpError, cleanRel } from "./paths.js";
 import { diffFiles, diffPair, diffSpec, status } from "./gitread.js";
 import { fsOp, saveFile } from "./write.js";
-import { getWorkspace, listWorkspaces, type IdeWorkspace } from "./workspaces.js";
+import { createMyWorkspace, getWorkspace, listWorkspaces, type IdeWorkspace } from "./workspaces.js";
 
 const showSecrets = (db: Db, w: IdeWorkspace) => !!w.project_id && db.getSetting<string[]>("show_secrets", []).includes(w.project_id);
 
@@ -33,6 +33,10 @@ export async function ideRoute(db: Db, method: string, url: URL, b: Record<strin
   const w = getWorkspace(db, seg[2] ?? "");
   const rest = seg.slice(3).join("/");
   const q = url.searchParams;
+  if (method === "POST" && rest === "create") {
+    if (w.kind !== "mine") throw new HttpError(400, "only 'my workspace' can be created");
+    return createMyWorkspace(db, w.project_id!);
+  }
   if (method === "GET" && rest === "") return { ...w, show_secrets: showSecrets(db, w) };
   if (method === "GET" && rest === "tree") {
     const ref = await refFor(w, q);
@@ -68,7 +72,8 @@ export async function ideRoute(db: Db, method: string, url: URL, b: Record<strin
     return diffPair(w.root, spec, q.get("path"), q.get("orig"), showSecrets(db, w));
   }
   if ((method === "PUT" && rest === "file") || (method === "POST" && rest === "fs")) {
-    if (w.read_only || w.ref) throw new HttpError(403, "this workspace is read-only");
+    // Only Guy's own edit clone is writable; mirrors, folders and agent workspaces stay read-only.
+    if (w.kind !== "mine" || !w.exists || w.read_only || w.ref) throw new HttpError(403, "this workspace is read-only");
     return rest === "file" ? saveFile(w.root, q.get("path"), b.content, b.base_sha) : fsOp(w.root, b);
   }
   if (method === "POST" && rest === "show-secrets") {

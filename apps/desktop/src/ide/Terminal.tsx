@@ -64,25 +64,30 @@ export function XTerm({ id, visible, onExit }: { id: string; visible: boolean; o
   return <div ref={box} className={cn("h-full w-full bg-[#0b0f14] p-1", !visible && "hidden")} />;
 }
 
-/** Guy's project terminals for one workspace: tabs, new, close. Sessions outlive a page reload. */
-export function TerminalPanel({ ws, onClose }: { ws: IdeWorkspace; onClose: () => void }) {
+/**
+ * Terminals for one workspace (Guy's project terminals) or for one running agent (agent shell: `sbx exec -it` in its
+ * sandbox, or a host shell in its worktree): tabs, new, close. Sessions outlive a page reload.
+ */
+export function TerminalPanel({ ws, agent, onClose }: { ws?: IdeWorkspace; agent?: { id: string; name: string }; onClose: () => void }) {
   const [list, setList] = useState<TermInfo[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const noFolder = ws.ref ? "This workspace is pinned to a git ref and has no folder on disk." : ws.kind === "mine" && !ws.exists ? "Create your workspace first to open a terminal in it." : "";
+  const key = agent ? `agent:${agent.id}` : ws?.id ?? "";
+  const noFolder = agent || !ws ? "" : ws.ref ? "This workspace is pinned to a git ref and has no folder on disk." : ws.kind === "mine" && !ws.exists ? "Create your workspace first to open a terminal in it." : "";
 
   const create = useCallback(async () => {
     setBusy(true);
     try {
-      const t = await api<TermInfo>("/api/term", "POST", { workspace: ws.id });
+      const t = agent ? await api<TermInfo>(`/api/term/agent/${encodeURIComponent(agent.id)}`, "POST", {}) : await api<TermInfo>("/api/term", "POST", { workspace: ws?.id });
       setErr("");
       setList((l) => [...l, t]);
       setActive(t.id);
     } catch (e) {
-      setErr(e instanceof ApiError && e.status === 503 ? UNAVAILABLE : String((e as Error).message));
+      const m = String((e as Error).message);
+      setErr(e instanceof ApiError && e.status === 503 && !agent ? UNAVAILABLE : e instanceof ApiError && (e.status === 409 || e.status === 503) && agent ? `Cannot open a shell for ${agent.name}: ${m}` : m);
     } finally { setBusy(false); }
-  }, [ws.id]);
+  }, [key]);
 
   useEffect(() => {
     let live = true;
@@ -91,11 +96,11 @@ export function TerminalPanel({ ws, onClose }: { ws: IdeWorkspace; onClose: () =
     api<TermList>("/api/term").then((r) => {
       if (!live) return;
       if (!r.available) return setErr(UNAVAILABLE);
-      const mine = r.sessions.filter((s) => s.workspace_id === ws.id);
+      const mine = r.sessions.filter((s) => s.workspace_id === key);
       if (mine.length) { setList(mine); setActive(mine[mine.length - 1]!.id); } else create();
     }).catch((e) => live && setErr(String(e.message)));
     return () => { live = false; };
-  }, [ws.id, noFolder]);
+  }, [key, noFolder]);
 
   const kill = (id: string) => {
     api(`/api/term/${id}`, "DELETE").catch(() => {});
@@ -116,12 +121,12 @@ export function TerminalPanel({ ws, onClose }: { ws: IdeWorkspace; onClose: () =
             <button title="Close terminal (kills the shell)" className="cursor-pointer opacity-50 hover:opacity-100" onClick={(e) => { e.stopPropagation(); kill(t.id); }}><X size={12} /></button>
           </div>
         ))}
-        <button title="New terminal in the workspace root" disabled={busy || !!noFolder} className="cursor-pointer px-2 py-1 opacity-70 hover:opacity-100 disabled:opacity-30" onClick={create}><Plus size={13} /></button>
+        <button title={agent ? `New shell in ${agent.name}'s workspace` : "New terminal in the workspace root"} disabled={busy || !!noFolder} className="cursor-pointer px-2 py-1 opacity-70 hover:opacity-100 disabled:opacity-30" onClick={create}><Plus size={13} /></button>
         <button title="Hide terminal panel (shells keep running)" className="ml-auto cursor-pointer px-2 py-1 opacity-70 hover:opacity-100" onClick={onClose}><X size={13} /></button>
       </div>
       <div className="relative min-h-0 flex-1">
         {(noFolder || err) && <div className="p-4 text-sm text-muted-foreground">{noFolder || err}</div>}
-        {!noFolder && !err && !list.length && <div className="p-4 text-sm text-muted-foreground">No terminal open. Click + to start a shell in this workspace.</div>}
+        {!noFolder && !err && !list.length && <div className="p-4 text-sm text-muted-foreground">No terminal open. Click + to start a shell{agent ? ` for ${agent.name}` : " in this workspace"}.</div>}
         {list.map((t) => <XTerm key={t.id} id={t.id} visible={t.id === active} onExit={(code) => setList((l) => l.map((x) => (x.id === t.id ? { ...x, exited: code } : x)))} />)}
       </div>
     </div>

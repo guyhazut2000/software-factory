@@ -11,6 +11,8 @@ export interface ExecOpts {
 
 export interface Workspace {
   kind: "sbx" | "worktree";
+  /** sbx only: sandbox name (for `sbx exec -it <name> <shell>`). */
+  sandbox?: string;
   /** Directory on the host (base clone or worktree). */
   hostDir: string;
   /** cwd to hand to the provider CLI ("." inside sbx). */
@@ -157,6 +159,7 @@ export async function createSbx(opts: { repo: string; base: string; branch: stri
   }
   const ws: Workspace = {
     kind: "sbx",
+    sandbox: name,
     hostDir: baseDir,
     cwd: ".",
     exec: (argv, o) => {

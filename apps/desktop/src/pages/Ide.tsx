@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Columns2, Eye, EyeOff, File, FileDiff, Folder, GitBranch, History, Link2Off, Lock, Minus, Plus, RefreshCw, Rows2, Save, Upload, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Columns2, Eye, EyeOff, File, FileDiff, Folder, GitBranch, History, Link2Off, Lock, Unlock, Minus, Plus, RefreshCw, Rows2, Save, Upload, X } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
 import { cn } from "../lib/utils";
@@ -11,7 +11,7 @@ type Tab = { key: string; title: string; kind: "file"; path: string } | { key: s
 const enc = encodeURIComponent;
 const base = (p: string) => p.split("/").pop() ?? p;
 /** Only "my workspace" (m-<pid>) is editable; every other workspace stays read-only. */
-const editable = (ws: IdeWorkspace) => ws.kind === "mine" && !ws.read_only && ws.exists !== false;
+const editable = (ws: IdeWorkspace) => !ws.read_only && !ws.ref && (ws.kind === "mine" ? ws.exists !== false : ws.kind === "task" && ws.lease?.owner === "guy");
 interface Branches { current: string | null; local: { name: string; upstream: string | null; current: boolean }[]; protected: string[] }
 /** sha256 each open file was loaded at, kept while it has unsaved edits (the save precondition). */
 const baseSha = new Map<string, string | null>();
@@ -60,6 +60,15 @@ export default function Ide({ initial }: { initial?: string }) {
       return next;
     });
   };
+  const [leaseBusy, setLeaseBusy] = useState<"" | "takeover" | "handback">("");
+  const lease = (what: "takeover" | "handback") => {
+    if (!ws) return;
+    setLeaseBusy(what);
+    api<IdeWorkspace>(`/api/ws/${ws.id}/${what}`, "POST", {})
+      .then((w) => { setWs({ ...w, show_secrets: ws.show_secrets }); loadList(); setRev((r) => r + 1); toast(what === "takeover" ? "Taken over: the agent stopped at a checkpoint" : "Handed back: your edits were pushed and the task is queued"); })
+      .catch((e) => toast(String(e.message)))
+      .finally(() => setLeaseBusy(""));
+  };
   const toggleSecrets = () => ws && api(`/api/ws/${ws.id}/show-secrets`, "POST", { on: !ws.show_secrets }).then(() => { setWs({ ...ws, show_secrets: !ws.show_secrets }); setRev((r) => r + 1); });
 
   if (!list.length) return <div className="p-8 text-center text-muted-foreground">No workspaces yet. Link a GitHub repository (it is cloned locally) or add a folder project on the Projects tab.</div>;
@@ -71,7 +80,10 @@ export default function Ide({ initial }: { initial?: string }) {
         <Select className="h-8 w-80" value={wid} onChange={(e) => setWid(e.target.value)}>
           {list.map((w) => <option key={w.id} value={w.id}>{w.kind === "task" ? "Task: " : ""}{w.label}</option>)}
         </Select>
-        {ws?.read_only && <Badge title={ws.note}><Lock size={11} />read-only</Badge>}
+        {ws?.lease?.owner === "agent" ? <Badge tone="warn" title={ws.note}><Lock size={11} />{ws.lease.agent} is working</Badge> : ws?.read_only && <Badge title={ws.note}><Lock size={11} />read-only</Badge>}
+        {ws?.lease?.owner === "guy" && <Badge tone="ok" title={ws.note}><Unlock size={11} />taken over</Badge>}
+        {ws?.kind === "task" && ws.lease?.owner !== "guy" && <Button size="sm" variant="outline" disabled={!!leaseBusy} title="Soft-stop the agent (checkpoint commit) and edit this workspace yourself" onClick={() => lease("takeover")}>{leaseBusy === "takeover" ? "Taking over..." : "Take over"}</Button>}
+        {ws?.lease?.owner === "guy" && <Button size="sm" disabled={!!leaseBusy} title="Commit and push your edits, then give the task back to the agent" onClick={() => lease("handback")}>{leaseBusy === "handback" ? "Handing back..." : "Hand back"}</Button>}
         {ws?.ref && <Badge tone="primary"><GitBranch size={11} />{ws.ref}</Badge>}
         {ws?.kind === "mine" && !ws.exists && <Button size="sm" onClick={() => api<IdeWorkspace>(`/api/ws/${ws.id}/create`, "POST", {}).then((w) => { setWs(w); loadList(); setRev((r) => r + 1); }).catch((e) => toast(String(e.message)))}>Create my workspace</Button>}
         {ws?.note && <span className="truncate text-xs text-muted-foreground">{ws.note}</span>}

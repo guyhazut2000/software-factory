@@ -88,6 +88,8 @@ ALTER TABLE tasks_v3 RENAME TO tasks;
 CREATE INDEX tasks_status ON tasks(status, type);
 CREATE INDEX tasks_ref ON tasks(project_id, source, external_ref);`),
   },
+  // v4: IDE edit leases. `lease='guy'` = Guy took over the task's workspace; agents skip it until hand-back.
+  { version: 4, name: "edit_leases", up: (db) => db.exec("ALTER TABLE tasks ADD COLUMN lease TEXT") },
 ];
 
 export class Db {

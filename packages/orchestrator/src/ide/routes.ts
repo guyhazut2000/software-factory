@@ -6,6 +6,16 @@ import { fsOp, saveFile } from "./write.js";
 import { branches, checkout, commit, createBranch, push, stage, unstage } from "./gitwrite.js";
 import { createMyWorkspace, getWorkspace, listWorkspaces, type IdeWorkspace } from "./workspaces.js";
 
+/** What the IDE needs from the engine for edit leases. */
+export interface IdeHost {
+  runningAgent(taskId: string): string | undefined;
+  takeOver(taskId: string): Promise<unknown>;
+  handBack(taskId: string): Promise<unknown>;
+}
+
+/** Writable: Guy's own clone, or a task workspace Guy has taken over. Mirrors, folders and agent-owned workspaces stay read-only. */
+const writable = (w: IdeWorkspace) => !w.read_only && !w.ref && (w.kind === "mine" ? !!w.exists : w.kind === "task" && w.lease?.owner === "guy");
+
 const showSecrets = (db: Db, w: IdeWorkspace) => !!w.project_id && db.getSetting<string[]>("show_secrets", []).includes(w.project_id);
 
 async function refFor(w: IdeWorkspace, q: URLSearchParams): Promise<string | undefined> {
@@ -27,16 +37,22 @@ export async function gitLog(w: IdeWorkspace, ref: string | undefined, rel: unkn
 }
 
 /** `/api/ws/...` routes (writes only in writable workspaces). Returns undefined if the path is not an IDE route. */
-export async function ideRoute(db: Db, method: string, url: URL, b: Record<string, unknown>): Promise<unknown> {
+export async function ideRoute(db: Db, method: string, url: URL, b: Record<string, unknown>, host?: IdeHost): Promise<unknown> {
+  const running = host ? (id: string) => host.runningAgent(id) : undefined;
   const seg = url.pathname.split("/").filter(Boolean); // api ws :wid ...rest
   if (seg[1] !== "ws") return undefined;
-  if (seg.length === 2 && method === "GET") return listWorkspaces(db);
-  const w = getWorkspace(db, seg[2] ?? "");
+  if (seg.length === 2 && method === "GET") return listWorkspaces(db, running);
+  const w = getWorkspace(db, seg[2] ?? "", running);
   const rest = seg.slice(3).join("/");
   const q = url.searchParams;
   if (method === "POST" && rest === "create") {
     if (w.kind !== "mine") throw new HttpError(400, "only 'my workspace' can be created");
     return createMyWorkspace(db, w.project_id!);
+  }
+  if (method === "POST" && (rest === "takeover" || rest === "handback")) {
+    if (w.kind !== "task" || !w.task_id || !host) throw new HttpError(400, "only agent task workspaces have edit leases");
+    await (rest === "takeover" ? host.takeOver(w.task_id) : host.handBack(w.task_id));
+    return getWorkspace(db, w.id, running);
   }
   if (method === "GET" && rest === "") return { ...w, show_secrets: showSecrets(db, w) };
   if (method === "GET" && rest === "tree") {
@@ -85,13 +101,12 @@ export async function ideRoute(db: Db, method: string, url: URL, b: Record<strin
     "git/push": () => push(w.root, b, w.project_id ? db.get("SELECT default_branch FROM projects WHERE id=?", w.project_id)?.default_branch : null),
   };
   if (method === "POST" && Object.hasOwn(gitWrites, rest)) {
-    // Git writes only in Guy's own edit clone ("My workspace").
-    if (w.kind !== "mine" || !w.exists || w.read_only || w.ref) throw new HttpError(403, "git writes are only allowed in 'my workspace'");
+    // Git writes only in Guy's own edit clone ("My workspace") or a task workspace he took over.
+    if (!writable(w)) throw new HttpError(403, w.lease?.owner === "agent" ? `${w.lease.agent} is working here: take over first` : "git writes are only allowed in 'my workspace' or a workspace you took over");
     return gitWrites[rest]();
   }
   if ((method === "PUT" && rest === "file") || (method === "POST" && rest === "fs")) {
-    // Only Guy's own edit clone is writable; mirrors, folders and agent workspaces stay read-only.
-    if (w.kind !== "mine" || !w.exists || w.read_only || w.ref) throw new HttpError(403, "this workspace is read-only");
+    if (!writable(w)) throw new HttpError(403, w.lease?.owner === "agent" ? `${w.lease.agent} is working here: take over first` : "this workspace is read-only");
     return rest === "file" ? saveFile(w.root, q.get("path"), b.content, b.base_sha) : fsOp(w.root, b);
   }
   if (method === "POST" && rest === "show-secrets") {

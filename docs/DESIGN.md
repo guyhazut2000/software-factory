@@ -173,7 +173,7 @@ Deviations from the original design: `node:sqlite` instead of Drizzle (ADR 4); o
 
 ### Phase 2 progress (see docs/PHASE2.md)
 - **M0 Foundations (done):** versioned SQLite migrations (`schema_migrations`, v1 = the v0.1.0 schema, each step in a transaction, refuses a database from a newer app); v2 project kinds (`github` | `folder` | `none`, `root_path`, nullable `repo`); v3 unified tasks (`source`, `type`, `external_ref`, `md_path`, `priority`, `due_at`, `parent_id`, `automation_id`, nullable `project_id`). `issue_number` and `kind` remain as generated columns so older queries and the UI keep working. Agents only pick up `code`/`review` tasks on `github` projects. A v0.1.0 database is migrated in place (CI seeds one and starts the app on Windows, macOS and Linux).
-- **M1 IDE browse and diff:** see the M1 entry below once merged.
+- **M1 IDE browse and diff (done, read-only):** IDE tab with a workspace picker (GitHub main mirror, folder projects, agent task workspaces: live worktree or pushed branch), lazy file tree, Monaco viewer with tabs, source control panel (branch, staged/unstaged, task changes vs base, history) and Monaco diff tabs; Diff button on task cards. API under `/api/ws/:wid/...` (tree, file, git/status, git/diff, git/log) with realpath sandboxing, symlink and secret rules, 2 MB caps, verified refs, argv-only git and a loopback Host check. Not yet: editing, commits and the per-project "My workspace" clone (M2), terminals (M3), live view inside an sbx sandbox (shows the last pushed branch until M3.4).
 
 ### Efficiency layer
 - **MCP:** every agent gets the local `factory` server. GitHub and filesystem MCP are opt-in per agent because tool definitions are re-sent on every request and cost tokens.

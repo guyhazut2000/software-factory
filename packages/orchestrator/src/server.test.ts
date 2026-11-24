@@ -160,6 +160,29 @@ describe("api", () => {
       expect(readFileSync(path.join(repo, "app.js"), "utf8").replace(/\r\n/g, "\n")).toBe("v1\n");
       expect((await call("PUT", "/api/ws/p-mp/file?path=app.js", { content: "x", base_sha: null })).status).toBe(403);
       expect((await call("POST", "/api/ws/p-mp/fs", { op: "delete", path: "app.js" })).status).toBe(403);
+      // git writes (M2.3): only in my workspace, push to a local bare remote, never main
+      const bare = mkdtempSync(path.join(tmpdir(), "sf-bare-"));
+      g(bare, "init", "-q", "--bare", "-b", "main");
+      g(mine, "remote", "set-url", "origin", bare);
+      g(mine, "config", "user.name", "t");
+      g(mine, "config", "user.email", "t@t");
+      expect((await call("POST", "/api/ws/p-mp/git/stage", { all: true })).status).toBe(403);
+      expect((await call("POST", "/api/ws/m-mp/git/constructor", {})).status).toBe(404);
+      expect((await call("POST", "/api/ws/m-mp/git/checkout", { name: "main" })).status).toBe(409); // dirty
+      expect((await call("POST", "/api/ws/m-mp/git/branch", { name: "feat/ide", checkout: true })).status).toBe(409);
+      expect((await call("POST", "/api/ws/m-mp/git/stage", { paths: ["app.js", "src/new.ts"] })).status).toBe(200);
+      expect((await call("POST", "/api/ws/m-mp/git/unstage", { paths: ["src/new.ts"] })).status).toBe(200);
+      expect((await call("POST", "/api/ws/m-mp/git/stage", { all: true })).status).toBe(200);
+      expect((await call("POST", "/api/ws/m-mp/git/push", {})).status).toBe(403); // on main
+      const br = await call("POST", "/api/ws/m-mp/git/branch", { name: "feat/ide", checkout: true });
+      expect(br.status).toBe(409); // still dirty (staged)
+      expect((await call("POST", "/api/ws/m-mp/git/commit", { message: "wip" })).status).toBe(200);
+      expect((await call("POST", "/api/ws/m-mp/git/push", { branch: "main" })).status).toBe(403);
+      expect((await call("POST", "/api/ws/m-mp/git/branch", { name: "feat/ide", checkout: true })).json.current).toBe("feat/ide");
+      expect((await call("POST", "/api/ws/m-mp/git/push", {})).json).toEqual({ pushed: "feat/ide", remote: "origin" });
+      expect(g(bare, "rev-parse", "refs/heads/feat/ide")).toBe(g(mine, "rev-parse", "HEAD"));
+      expect(g(bare, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/feat/ide");
+      expect((await call("GET", "/api/ws/m-mp/git/branches")).json.local.map((b: { name: string }) => b.name).sort()).toEqual(["feat/ide", "main"]);
     } finally {
       if (prev === undefined) delete process.env.SF_DATA_DIR;
       else process.env.SF_DATA_DIR = prev;

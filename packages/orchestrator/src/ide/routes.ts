@@ -3,6 +3,7 @@ import { atRef, disk, gitText, verifyRef } from "./files.js";
 import { HttpError, cleanRel } from "./paths.js";
 import { diffFiles, diffPair, diffSpec, status } from "./gitread.js";
 import { fsOp, saveFile } from "./write.js";
+import { branches, checkout, commit, createBranch, push, stage, unstage } from "./gitwrite.js";
 import { createMyWorkspace, getWorkspace, listWorkspaces, type IdeWorkspace } from "./workspaces.js";
 
 const showSecrets = (db: Db, w: IdeWorkspace) => !!w.project_id && db.getSetting<string[]>("show_secrets", []).includes(w.project_id);
@@ -70,6 +71,23 @@ export async function ideRoute(db: Db, method: string, url: URL, b: Record<strin
     const spec = await diffSpec(w.root, { mode, base, head, worktree });
     if (!q.get("path")) return { label: spec.label, ...(await diffFiles(w.root, spec)) };
     return diffPair(w.root, spec, q.get("path"), q.get("orig"), showSecrets(db, w));
+  }
+  if (rest === "git/branches" && method === "GET") {
+    if (!w.git || w.ref) throw new HttpError(400, "this workspace has no branches to list");
+    return branches(w.root);
+  }
+  const gitWrites: Record<string, () => Promise<unknown>> = {
+    "git/stage": () => stage(w.root, b),
+    "git/unstage": () => unstage(w.root, b),
+    "git/commit": () => commit(w.root, b),
+    "git/branch": () => createBranch(w.root, b),
+    "git/checkout": () => checkout(w.root, b),
+    "git/push": () => push(w.root, b, w.project_id ? db.get("SELECT default_branch FROM projects WHERE id=?", w.project_id)?.default_branch : null),
+  };
+  if (method === "POST" && Object.hasOwn(gitWrites, rest)) {
+    // Git writes only in Guy's own edit clone ("My workspace").
+    if (w.kind !== "mine" || !w.exists || w.read_only || w.ref) throw new HttpError(403, "git writes are only allowed in 'my workspace'");
+    return gitWrites[rest]();
   }
   if ((method === "PUT" && rest === "file") || (method === "POST" && rest === "fs")) {
     // Only Guy's own edit clone is writable; mirrors, folders and agent workspaces stay read-only.

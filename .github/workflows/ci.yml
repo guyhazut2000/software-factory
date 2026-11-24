@@ -51,3 +51,19 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47821/api/health)" = "401"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "authorization: Bearer $TOKEN" http://127.0.0.1:47821/api/health)" = "200"
           echo "start smoke OK"
+      - name: second pnpm start reuses the existing build
+        shell: bash
+        env:
+          SF_NO_OPEN: "1"
+          SF_PORT: "47831"
+          SF_AGENT_PORT: "47832"
+        run: |
+          export SF_DATA_DIR="$RUNNER_TEMP/sfdata2"
+          pnpm start > start2.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:47831/ping >/dev/null; then break; fi
+            sleep 2
+          done
+          cat start2.log
+          curl -sf http://127.0.0.1:47831/ | grep -q "window.__SF__"
+          echo "second start OK"

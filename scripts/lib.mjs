@@ -28,15 +28,22 @@ export function pnpm(args, opts = {}) {
 }
 
 export function ensureInstalled() {
-  if (existsSync(path.join(root, "node_modules")) && existsSync(path.join(root, "apps/desktop/node_modules"))) return;
-  log("Dependencies are missing: running pnpm install (first run only)...");
+  const marker = path.join(root, "node_modules", ".modules.yaml");
+  const lock = path.join(root, "pnpm-lock.yaml");
+  const present = existsSync(marker) && existsSync(path.join(root, "apps/desktop/node_modules"));
+  // After a `git pull` that changed dependencies, the lockfile is newer than the last install.
+  if (present && !(existsSync(lock) && statSync(lock).mtimeMs > statSync(marker).mtimeMs)) return;
+  log(present ? "Dependencies changed: running pnpm install..." : "Dependencies are missing: running pnpm install (first run only)...");
   const r = pnpm(["install"]);
   if (r.status !== 0) die("pnpm install failed. Is pnpm installed? Try: npm install -g pnpm");
 }
 
-function newest(dir, skip = new Set(["node_modules", "dist"])) {
+/** Newest mtime under a file or directory (skipping build output and dependencies). */
+export function newest(dir, skip = new Set(["node_modules", "dist"])) {
   let t = 0;
   if (!existsSync(dir)) return 0;
+  const st = statSync(dir);
+  if (!st.isDirectory()) return st.mtimeMs;
   for (const e of readdirSync(dir)) {
     if (skip.has(e)) continue;
     const p = path.join(dir, e);

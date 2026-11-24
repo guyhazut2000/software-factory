@@ -27,6 +27,23 @@ describe("engine tasks on the unified schema", () => {
     expect(ids).not.toContain("m1");
     expect(ids).not.toContain("c1");
   });
+  it("creates, edits and completes local manual tasks; local code tasks are held", () => {
+    const m = engine.createLocalTask({ title: " Pay rent ", body: "by the 1st" });
+    expect(m).toMatchObject({ source: "local", type: "manual", status: "queued", project_id: null, title: "Pay rent" });
+    expect(engine.updateLocalTask(m.id, { title: "Pay rent now", priority: 2, project_id: "f1" })).toMatchObject({ title: "Pay rent now", priority: 2, project_id: "f1" });
+    engine.completeTask(m.id);
+    expect(db.get("SELECT status FROM tasks WHERE id=?", m.id)?.status).toBe("done");
+    engine.completeTask(m.id, false);
+    expect(db.get("SELECT status FROM tasks WHERE id=?", m.id)?.status).toBe("queued");
+    const c = engine.createLocalTask({ type: "code", title: "Refactor", project_id: "p1" });
+    expect(engine.runnableTasks().map((r) => r.id)).not.toContain(c.id);
+    expect(() => engine.completeTask(c.id)).toThrow(/manual/);
+    expect(() => engine.createLocalTask({ title: "" })).toThrow(/title/);
+    expect(() => engine.createLocalTask({ title: "x", type: "script" })).toThrow();
+    expect(() => engine.createLocalTask({ title: "x", project_id: "nope" })).toThrow(/project/);
+    const gh = db.get("SELECT id FROM tasks WHERE source='github' AND type='code'")!;
+    expect(() => engine.updateLocalTask(gh.id, { title: "y" })).toThrow(/local/);
+  });
   it("backfills root_path for github projects linked before v2", () => {
     backfillRoots(db);
     expect(db.get("SELECT root_path FROM projects WHERE id='p1'")?.root_path).toBe(repoDirFor("me/demo"));

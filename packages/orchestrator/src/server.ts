@@ -140,14 +140,16 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       }
     }
     if (p === "/api/tasks" && method === "POST") {
-      const pr = db.get("SELECT * FROM projects WHERE id=?", b.project_id);
-      if (!pr) throw new Error("project not found");
-      if (pr.kind !== "github") throw new Error("Tasks on folder/none projects arrive with local tasks (M5)");
+      const pr = b.project_id ? db.get("SELECT * FROM projects WHERE id=?", b.project_id) : null;
+      if (b.project_id && !pr) throw new Error("project not found");
+      if (!pr || b.source === "local" || pr.kind !== "github" || (b.type && b.type !== "code")) return engine.createLocalTask(b);
       const labels = ["status:ready", ...(b.agent ? [`agent:${b.agent}`] : [])];
       const issue = await gh.createIssue(pr.repo, b.title, b.body ?? "", labels);
       return engine.createTaskFromIssue(pr, issue.number, b.title, b.body ?? "", labels);
     }
     if (seg[1] === "tasks" && id) {
+      if (!act && method === "PUT") return engine.updateLocalTask(id, b);
+      if (act === "complete" && method === "POST") return engine.completeTask(id, b.done !== false), { ok: true };
       if (act === "merge") return await engine.mergeTask(id), { ok: true };
       if (act === "retry") return engine.setTask(id, { status: "queued", restart_count: 0, note: "Retry" }), { ok: true };
       if (act === "stop") {

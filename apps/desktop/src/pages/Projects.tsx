@@ -51,7 +51,7 @@ export function Projects() {
           {state.projects.map((p) => (
             <Card key={p.id} className="flex items-center gap-3 p-3">
               <div className="min-w-0 flex-1"><div className="font-medium">{projectLabel(p)} {p.kind !== "github" && <Badge>{p.kind}</Badge>}</div><div className="text-xs text-muted-foreground">{state.tasks.filter((t) => t.project_id === p.id).length} tasks{p.kind === "github" ? ` / branch ${p.default_branch}` : p.root_path ? ` / ${p.root_path}` : ""}</div></div>
-              {p.kind === "github" && <Button size="sm" onClick={() => setNewTask({ project: p, title: "", body: "", agent: "" })}><Plus size={13} />Task</Button>}
+              {<Button size="sm" onClick={() => setNewTask({ project: p, title: "", body: "", agent: "" })}><Plus size={13} />Task</Button>}
               <Button size="sm" variant="outline" onClick={() => setEditing(p)}>Instructions</Button>
               {p.kind !== "github" && <Button size="icon" variant="ghost" title={p.kind === "folder" ? "Rename or relink folder" : "Rename"} onClick={() => setRelink({ project: p, name: p.name, root_path: p.root_path ?? "" })}>{p.kind === "folder" ? <FolderOpen size={14} /> : <Pencil size={14} />}</Button>}
               {p.kind === "github" && <Button size="icon" variant="ghost" title="Create status:* and agent:* labels" onClick={() => wrap(() => api(`/api/projects/${p.id}/labels`, "POST", {}))}><Tags size={14} /></Button>}
@@ -109,11 +109,11 @@ export function Projects() {
       <Dialog open={!!newTask} onClose={() => setNewTask(null)} title={`New task in ${newTask ? projectLabel(newTask.project) : ""}`}>
         {newTask && (
           <div className="grid gap-3">
-            <div className="text-xs text-muted-foreground">Creates a GitHub Issue labelled <code>status:ready</code>; an idle developer agent picks it up. Or just ask the Chief.</div>
+            <div className="text-xs text-muted-foreground">{newTask.project.kind === "github" ? <>Creates a GitHub Issue labelled <code>status:ready</code>; an idle developer agent picks it up. Or just ask the Chief.</> : <>Creates a local manual task (a to-do for you), saved as markdown in your workspace repo.</>}</div>
             <div><Label>Title</Label><Input value={newTask.title} onChange={(e) => setNewTask({ ...newTask, title: e.target.value })} /></div>
             <div><Label>Description / acceptance criteria</Label><Textarea rows={6} value={newTask.body} onChange={(e) => setNewTask({ ...newTask, body: e.target.value })} /></div>
-            <div><Label>Pin to agent (optional)</Label><Select value={newTask.agent} onChange={(e) => setNewTask({ ...newTask, agent: e.target.value })}><option value="">any</option>{state.agents.filter((a) => a.permissions.includes("open_pr")).map((a) => <option key={a.id}>{a.name}</option>)}</Select></div>
-            <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setNewTask(null)}>Cancel</Button><Button disabled={!newTask.title} onClick={() => wrap(async () => { await api("/api/tasks", "POST", { project_id: newTask.project.id, title: newTask.title, body: newTask.body, agent: newTask.agent || undefined }); setNewTask(null); })}>Create issue</Button></div>
+            {newTask.project.kind === "github" && <div><Label>Pin to agent (optional)</Label><Select value={newTask.agent} onChange={(e) => setNewTask({ ...newTask, agent: e.target.value })}><option value="">any</option>{state.agents.filter((a) => a.permissions.includes("open_pr")).map((a) => <option key={a.id}>{a.name}</option>)}</Select></div>}
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setNewTask(null)}>Cancel</Button><Button disabled={!newTask.title} onClick={() => wrap(async () => { await api("/api/tasks", "POST", { project_id: newTask.project.id, title: newTask.title, body: newTask.body, agent: newTask.agent || undefined }); setNewTask(null); })}>{newTask.project.kind === "github" ? "Create issue" : "Create task"}</Button></div>
           </div>
         )}
       </Dialog>

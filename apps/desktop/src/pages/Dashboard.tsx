@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openAgent } from "../lib/drawer";
-import { ExternalLink, FileDiff, GitMerge, RotateCw, ScrollText, Square } from "lucide-react";
+import { Check, ExternalLink, FileDiff, GitMerge, Pencil, Plus, RotateCw, ScrollText, Square, Undo2 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api } from "../lib/api";
-import { Badge, Button, Card, Dialog, StateDot, Switch } from "../components/ui";
+import { Badge, Button, Card, Dialog, Input, Label, Select, StateDot, Switch, Textarea } from "../components/ui";
 import { ago, cn, fmtTokens } from "../lib/utils";
 import type { LogEvent, Task } from "../lib/types";
+import { sourceBadge } from "../lib/tasks";
 
 const COLUMNS: [string, string][] = [["queued", "Queued"], ["working", "Working"], ["waiting_for_guy", "Waiting for you"], ["in_review", "In review"], ["done", "Done"], ["failed", "Failed"]];
+type TaskForm = { id?: string; title: string; body: string; type: "manual" | "code"; project_id: string; priority: string };
 const KIND_COLOR: Record<string, string> = { error: "text-danger", stderr: "text-warn", supervisor: "text-warn", blocked: "text-danger", tool: "text-muted-foreground", progress: "text-ok", question: "text-warn", system: "text-primary" };
 
 export function Dashboard({ goto }: { goto: (t: string, arg?: string) => void }) {
   const { state, logs, refresh, toast } = useStore();
   const [filter, setFilter] = useState<string | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
+  const [form, setForm] = useState<TaskForm | null>(null);
   const [taskLog, setTaskLog] = useState<LogEvent[]>([]);
   const wrap = (fn: () => Promise<unknown>) => fn().then(refresh).catch((e) => toast(String(e.message ?? e)));
   const endRef = useRef<HTMLDivElement>(null);
@@ -63,12 +66,13 @@ export function Dashboard({ goto }: { goto: (t: string, arg?: string) => void })
             const items = state.tasks.filter((t) => t.status === key);
             return (
               <div key={key} className="w-[210px] shrink-0 self-start rounded-xl bg-muted/50 p-2">
-                <div className="mb-2 flex items-center justify-between px-1 text-xs font-medium text-muted-foreground">{label}<span>{items.length}</span></div>
+                <div className="mb-2 flex items-center justify-between px-1 text-xs font-medium text-muted-foreground">{label}<span className="flex items-center gap-1">{items.length}{key === "queued" && <button className="cursor-pointer hover:text-foreground" title="New local task" onClick={() => setForm({ title: "", body: "", type: "manual", project_id: "", priority: "" })}><Plus size={13} /></button>}</span></div>
                 <div className="flex flex-col gap-2">
                   {items.map((t) => (
                     <Card key={t.id} className="p-2.5 text-xs">
                       <div className="font-medium leading-snug">{t.title}</div>
-                      <div className="mt-1 text-muted-foreground">{project(t.project_id)}{t.issue_number ? ` #${t.issue_number}` : ""}{t.assignee_id && <> / <button className="cursor-pointer hover:underline" title="Open the agent drawer" onClick={() => openAgent(t.assignee_id!)}>{agentName(t.assignee_id)}</button></>}</div>
+                      <div className="mt-1 flex flex-wrap gap-1"><Badge tone={sourceBadge(t).tone}>{sourceBadge(t).label}</Badge>{t.priority != null && <Badge>P{t.priority}</Badge>}</div>
+                      <div className="mt-1 text-muted-foreground">{project(t.project_id) || (t.source === "local" ? "loose" : "")}{t.assignee_id && <> / <button className="cursor-pointer hover:underline" title="Open the agent drawer" onClick={() => openAgent(t.assignee_id!)}>{agentName(t.assignee_id)}</button></>}</div>
                       {t.note && <div className="mt-1 text-muted-foreground">{t.note}</div>}
                       {t.restart_count > 0 && <Badge tone="warn" className="mt-1">restarts {t.restart_count}</Badge>}
                       <div className="mt-2 flex flex-wrap gap-1">
@@ -77,7 +81,10 @@ export function Dashboard({ goto }: { goto: (t: string, arg?: string) => void })
                         {t.pr_url && <a href={t.pr_url} target="_blank" rel="noreferrer"><Button size="sm" variant="ghost"><ExternalLink size={12} />PR</Button></a>}
                         {t.status === "in_review" && <Button size="sm" onClick={() => confirm(`Squash-merge PR #${t.pr_number}?`) && wrap(() => api(`/api/tasks/${t.id}/merge`, "POST", {}))}><GitMerge size={12} />Merge</Button>}
                         {t.status === "working" && <Button size="sm" variant="outline" onClick={() => wrap(() => api(`/api/tasks/${t.id}/stop`, "POST", {}))}><Square size={12} />Stop</Button>}
-                        {(t.status === "failed" || t.status === "queued") && <Button size="sm" variant="outline" onClick={() => wrap(() => api(`/api/tasks/${t.id}/retry`, "POST", {}))}><RotateCw size={12} />Retry</Button>}
+                        {t.source === "local" && <Button size="sm" variant="ghost" onClick={() => setForm({ id: t.id, title: t.title, body: t.body, type: t.type === "code" ? "code" : "manual", project_id: t.project_id ?? "", priority: t.priority?.toString() ?? "" })}><Pencil size={12} />Edit</Button>}
+                        {t.type === "manual" && t.status !== "done" && <Button size="sm" onClick={() => wrap(() => api(`/api/tasks/${t.id}/complete`, "POST", {}))}><Check size={12} />Done</Button>}
+                        {t.type === "manual" && t.status === "done" && <Button size="sm" variant="outline" onClick={() => wrap(() => api(`/api/tasks/${t.id}/complete`, "POST", { done: false }))}><Undo2 size={12} />Reopen</Button>}
+                        {t.type !== "manual" && (t.status === "failed" || t.status === "queued") && <Button size="sm" variant="outline" onClick={() => wrap(() => api(`/api/tasks/${t.id}/retry`, "POST", {}))}><RotateCw size={12} />Retry</Button>}
                       </div>
                     </Card>
                   ))}
@@ -99,6 +106,26 @@ export function Dashboard({ goto }: { goto: (t: string, arg?: string) => void })
           </div>
         </Card>
       </div>
+      <Dialog open={!!form} onClose={() => setForm(null)} title={form?.id ? "Edit task" : "New local task"}>
+        {form && (
+          <div className="grid gap-3">
+            <div className="text-xs text-muted-foreground">Local tasks are saved as markdown in your workspace repo. Manual tasks are to-dos for you; local code tasks wait until agents can run them (M8). For a GitHub Issue use Projects, then Task.</div>
+            <div><Label>Title</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
+            <div><Label>Notes</Label><Textarea rows={5} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></div>
+            <div className="grid grid-cols-3 gap-2">
+              <div><Label>Type</Label><Select disabled={!!form.id} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as TaskForm["type"] })}><option value="manual">manual</option><option value="code">code</option></Select></div>
+              <div><Label>Project</Label><Select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}><option value="">none (loose)</option>{state.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>
+              <div><Label>Priority</Label><Input type="number" min={0} value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} /></div>
+            </div>
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setForm(null)}>Cancel</Button><Button disabled={!form.title.trim()} onClick={() => wrap(async () => {
+              const body = { title: form.title, body: form.body, project_id: form.project_id || null, priority: form.priority === "" ? null : Number(form.priority) };
+              if (form.id) await api(`/api/tasks/${form.id}`, "PUT", body);
+              else await api("/api/tasks", "POST", { ...body, source: "local", type: form.type });
+              setForm(null);
+            })}>{form.id ? "Save" : "Create"}</Button></div>
+          </div>
+        )}
+      </Dialog>
       <Dialog open={!!logTask} onClose={() => setLogTask(null)} title={logTask?.title ?? ""} wide>
         <div className="max-h-[60vh] overflow-auto rounded-md bg-muted p-2 font-mono text-[11px]">
           {taskLog.map((l, i) => <div key={i} className={cn("whitespace-pre-wrap break-words", KIND_COLOR[l.kind])}><span className="text-muted-foreground">{new Date(l.ts).toLocaleTimeString()} {l.kind} </span>{l.text}</div>)}

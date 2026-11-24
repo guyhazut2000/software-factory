@@ -4,7 +4,7 @@ import { useStore } from "../lib/store";
 import { api } from "../lib/api";
 import { ago, cn, fmtTokens } from "../lib/utils";
 import { activityQuery, type Activity } from "../lib/activity";
-import { agentLogs, agentMessages, clampWidth, DRAWER_TABS, onOpenAgent, taskWorkspace, type DrawerTab } from "../lib/drawer";
+import { agentLogs, agentMessages, clampWidth, recreateHint, DRAWER_TABS, onOpenAgent, taskWorkspace, type DrawerTab } from "../lib/drawer";
 import type { Agent, Message } from "../lib/types";
 import { Badge, Button, StateDot } from "./ui";
 import { AgentForm } from "./AgentForm";
@@ -83,7 +83,15 @@ export function AgentDrawer({ gotoIde }: { gotoIde: (wid: string) => void }) {
       );
       case "settings": {
         const v = edit ?? agent;
-        return <div className="p-4"><AgentForm value={v} onChange={setEdit} onCancel={() => setEdit(null)} onSave={() => wrap(async () => { await api(`/api/agents/${agent.id}`, "PUT", v); setEdit(null); })} /></div>;
+        return (
+          <div className="grid gap-4 p-4">
+            <AgentForm value={v} onChange={setEdit} onCancel={() => setEdit(null)} onSave={() => wrap(async () => { await api(`/api/agents/${agent.id}`, "PUT", v); setEdit(null); })} />
+            <div className="flex items-center gap-3 rounded-md border p-3 text-sm">
+              <div className="flex-1 text-muted-foreground">{recreateHint(agent)}</div>
+              <Button size="sm" variant="outline" disabled={!agent.current_task_id} onClick={() => confirm(`Recreate ${agent.name}'s sandbox with ${agent.cpu} CPU / ${agent.ram_mb} MB?`) && wrap(() => api(`/api/agents/${agent.id}/recreate-sandbox`, "POST", {}))}><RotateCcw size={13} />Recreate sandbox</Button>
+            </div>
+          </div>
+        );
       }
       case "terminal": return running ? <div className="h-full p-2"><TerminalPanel key={agent.id} agent={{ id: agent.id, name: agent.name }} onClose={() => setTarget({ ...target, tab: "overview" })} /></div> : <Empty>The agent has no live workspace (not running).</Empty>;
       case "files":

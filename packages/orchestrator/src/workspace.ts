@@ -144,17 +144,27 @@ function worktreeWs(dir: string, baseDir: string): Workspace {
 /* ---------------- Docker Sandboxes (sbx), clone mode ---------------- */
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-export async function createSbx(opts: { repo: string; base: string; branch: string; taskId: string; sbxAgent: string; fresh: boolean }): Promise<Workspace> {
+export const sandboxNameFor = (taskId: string) => `sf-${taskId.slice(0, 8)}`;
+
+/** `sbx create` argv. CPU/RAM apply only at create time (docs.docker.com/reference/cli/sbx/create); 0/empty = sbx default. */
+export function sbxCreateArgs(o: { name: string; sbxAgent: string; dir: string; cpu?: number | null; ramMb?: number | null }): string[] {
+  const res = [...(o.cpu && o.cpu > 0 ? ["--cpus", String(Math.floor(o.cpu))] : []), ...(o.ramMb && o.ramMb >= 512 ? ["--memory", `${Math.floor(o.ramMb)}m`] : [])];
+  return ["create", "--clone", "--name", o.name, ...res, o.sbxAgent, o.dir];
+}
+
+export async function removeSbx(name: string): Promise<void> {
+  await run("sbx", ["stop", name]);
+  await run("sbx", ["rm", "--force", name]);
+}
+
+export async function createSbx(opts: { repo: string; base: string; branch: string; taskId: string; sbxAgent: string; fresh: boolean; cpu?: number | null; ramMb?: number | null }): Promise<Workspace> {
   const baseDir = await ensureBaseClone(opts.repo, opts.base);
-  const name = `sf-${opts.taskId.slice(0, 8)}`;
-  if (opts.fresh) {
-    await run("sbx", ["stop", name]);
-    await run("sbx", ["rm", "--force", name]);
-  }
+  const name = sandboxNameFor(opts.taskId);
+  if (opts.fresh) await removeSbx(name);
   const ls = await run("sbx", ["ls"]);
   if (!ls.stdout.includes(name)) {
     // Clone mode: the agent edits a private clone inside the microVM. Flags verified in docs.docker.com/ai/sandboxes/usage
-    const r = await run("sbx", ["create", "--clone", "--name", name, opts.sbxAgent, baseDir], { timeoutMs: 600_000 });
+    const r = await run("sbx", sbxCreateArgs({ name, sbxAgent: opts.sbxAgent, dir: baseDir, cpu: opts.cpu, ramMb: opts.ramMb }), { timeoutMs: 600_000 });
     if (r.code !== 0) throw new Error(`sbx create failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
   }
   const ws: Workspace = {

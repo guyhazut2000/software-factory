@@ -9,6 +9,7 @@ export function buildInstructions(project: Row | undefined, agent: Row, skillNam
   const lines = [
     `# Role: ${agent.name} (${agent.role})`,
     agent.description,
+    ...(agent.instructions ? ["", "# Role instructions", String(agent.instructions)] : []),
     "",
     "# Operating rules (Software Factory)",
     "- Work only on the assigned task. Keep changes minimal and match existing conventions.",

@@ -1,5 +1,5 @@
 export interface Agent {
-  id: string; name: string; role: string; description: string; provider: string; model: string; effort: string;
+  id: string; name: string; role: string; description: string; instructions?: string; provider: string; model: string; effort: string;
   context: { files?: string[]; allowed_paths?: string[]; history_size?: number };
   permissions: string[]; token_budget: number | null; max_runtime_sec: number; cpu: number; ram_mb: number;
   skills: string[]; mcp: { github?: boolean; filesystem?: boolean };

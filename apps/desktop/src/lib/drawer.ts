@@ -30,3 +30,11 @@ export const agentLogs = (logs: LogEvent[], agentId: string, limit = 300) => log
 
 /** IDE workspace id of a task (the task's worktree / branch view). */
 export const taskWorkspace = (taskId: string | null | undefined) => (taskId ? `t-${taskId}` : null);
+
+/** Settings-tab hint for "Recreate sandbox": CPU/RAM only apply when a sandbox is created. */
+export const recreateHint = (a: { current_task_id: string | null; state: string; cpu: number; ram_mb: number }) =>
+  !a.current_task_id
+    ? "No task, so no sandbox yet. CPU/RAM apply when the next sandbox is created."
+    : a.state === "running"
+      ? `Restarts the current run in a fresh sandbox (${a.cpu} CPU / ${a.ram_mb} MB).`
+      : `Removes the task's sandbox; the next run recreates it with ${a.cpu} CPU / ${a.ram_mb} MB.`;

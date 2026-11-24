@@ -114,7 +114,8 @@ describe("api", () => {
     const ws = (await call("GET", "/api/ws")).json.find((w: { id: string }) => w.id === "t-tk1");
     expect(ws).toMatchObject({ kind: "task", ref: "origin/sf/5-fix", read_only: true });
     expect((await call("GET", "/api/ws/t-tk1/file?path=app.js")).json.content).toBe("v2\n");
-    expect((await call("GET", "/api/ws/p-gp/file?path=app.js")).json.content).toBe("v1\n");
+    // checked-out files may be CRLF on Windows (core.autocrlf); blobs from git are LF
+    expect((await call("GET", "/api/ws/p-gp/file?path=app.js")).json.content.replace(/\r\n/g, "\n")).toBe("v1\n");
     expect((await call("GET", "/api/ws/t-tk1/git/diff?mode=task")).json.files).toEqual([{ status: "M", path: "app.js" }]);
     const pair = (await call("GET", "/api/ws/t-tk1/git/diff?mode=task&path=app.js")).json;
     expect([pair.original.content, pair.modified.content]).toEqual(["v1\n", "v2\n"]);

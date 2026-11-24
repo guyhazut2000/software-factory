@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Columns2, Eye, EyeOff, File, FileDiff, Folder, GitBranch, History, Link2Off, Lock, Unlock, Minus, Plus, RefreshCw, Rows2, Save, Upload, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Columns2, Eye, EyeOff, File, FileDiff, Folder, GitBranch, History, Link2Off, Lock, Unlock, Minus, Plus, RefreshCw, Rows2, Save, SquareTerminal, Upload, X } from "lucide-react";
+import { TerminalPanel } from "../ide/Terminal";
 import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
 import { cn } from "../lib/utils";
@@ -60,6 +61,13 @@ export default function Ide({ initial }: { initial?: string }) {
       return next;
     });
   };
+  const [showTerm, setShowTerm] = useState(() => localStorage.getItem("sf-ide-term") === "1");
+  const toggleTerm = () => setShowTerm((v) => { localStorage.setItem("sf-ide-term", v ? "0" : "1"); return !v; });
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.ctrlKey && e.key === "`") { e.preventDefault(); toggleTerm(); } };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
   const [leaseBusy, setLeaseBusy] = useState<"" | "takeover" | "handback">("");
   const lease = (what: "takeover" | "handback") => {
     if (!ws) return;
@@ -88,6 +96,7 @@ export default function Ide({ initial }: { initial?: string }) {
         {ws?.kind === "mine" && !ws.exists && <Button size="sm" onClick={() => api<IdeWorkspace>(`/api/ws/${ws.id}/create`, "POST", {}).then((w) => { setWs(w); loadList(); setRev((r) => r + 1); }).catch((e) => toast(String(e.message)))}>Create my workspace</Button>}
         {ws?.note && <span className="truncate text-xs text-muted-foreground">{ws.note}</span>}
         <div className="ml-auto flex gap-1">
+          <Button size="sm" variant={showTerm ? "outline" : "ghost"} onClick={toggleTerm} title="Toggle the terminal panel (Ctrl+`)"><SquareTerminal size={13} />terminal</Button>
           <Button size="sm" variant="ghost" onClick={toggleSecrets} title="Show .env, keys and certificates in this project">{ws?.show_secrets ? <Eye size={13} /> : <EyeOff size={13} />}secrets</Button>
           <Button size="icon" variant="ghost" title="Reload" onClick={() => { loadList(); setRev((r) => r + 1); }}><RefreshCw size={14} /></Button>
         </div>
@@ -109,6 +118,7 @@ export default function Ide({ initial }: { initial?: string }) {
               {tab?.kind === "file" && <FilePane ws={ws} path={tab.path} rev={rev} onReveal={toggleSecrets} onSaved={() => setScRev((r) => r + 1)} />}
               {tab?.kind === "diff" && <DiffPane ws={ws} tab={tab} rev={rev} />}
             </div>
+            {showTerm && <div className="h-[38%] min-h-[140px]"><TerminalPanel key={ws.id} ws={ws} onClose={toggleTerm} /></div>}
           </div>
           <div className="min-h-0 overflow-auto border-l"><SourceControl ws={ws} rev={rev + scRev} onChanged={() => setRev((r) => r + 1)} onDiff={(c, mode) => open({ key: `d:${mode}:${c.path}`, title: base(c.path), kind: "diff", path: c.path, orig: c.orig_path, mode })} /></div>
         </div>

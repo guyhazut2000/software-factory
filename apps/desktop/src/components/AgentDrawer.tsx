@@ -113,7 +113,7 @@ export function AgentDrawer({ gotoIde }: { gotoIde: (wid: string) => void }) {
       case "messages": {
         const own = agentMessages(msgs, agent.id);
         const send = () => draft.trim() && wrap(async () => {
-          const r = await api<{ queued: boolean }>("/api/threads/direct", "POST", { agent_id: agent.id, project_id: agent.project_id ?? null, text: draft.trim() });
+          const r = await api<{ queued: boolean }>("/api/threads/direct", "POST", { agent_id: agent.id, project_id: state.tasks.find((t) => t.id === agent.current_task_id)?.project_id ?? null, text: draft.trim() });
           setDraft("");
           if (r.queued) toast(`${agent.name} is busy: note queued for its next turn`);
           setMsgs(await loadAgentMessages(agent.id));

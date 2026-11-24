@@ -8,6 +8,8 @@ await build({
   target: "node22",
   format: "esm",
   outfile: "dist/orchestrator.mjs",
+  // native module: loaded at runtime from node_modules / the bundled resources (M3.3)
+  external: ["@lydell/node-pty"],
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
 });
 mkdirSync("dist", { recursive: true });

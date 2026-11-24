@@ -10,6 +10,13 @@
     "build": "node build.mjs",
     "start": "node --experimental-sqlite src/main.ts"
   },
-  "dependencies": { "@sf/adapters": "workspace:*", "ws": "^8.18.0" },
-  "devDependencies": { "@types/ws": "^8.5.13", "esbuild": "^0.24.0" }
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.18",
+    "@sf/adapters": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24.0"
+  }
 }

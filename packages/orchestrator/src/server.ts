@@ -10,11 +10,13 @@ import { bootstrapLabels, getToken, gh, setToken } from "./github.js";
 import { ensureBaseClone, applySbxPolicy, repoDirFor } from "./workspace.js";
 import { newLocalProject } from "./projects.js";
 import { ideRoute } from "./ide/routes.js";
+import { TermRegistry } from "./term/pty.js";
+import { termRoute } from "./term/routes.js";
 import { now, uid } from "./util.js";
 
 type J = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-const ALLOWED_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
+export const ALLOWED_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420", "http://127.0.0.1:1420"]);
 
 async function body(req: http.IncomingMessage): Promise<J> {
   let raw = "";
@@ -27,6 +29,7 @@ async function body(req: http.IncomingMessage): Promise<J> {
 
 export function startServers(engine: Engine, o: { apiPort: number; agentPort: number; token: string; agentBind: string; uiDir?: string }): Promise<{ apiPort: number; agentPort: number; close: () => void }> {
   const { db, hub } = engine;
+  const terms = new TermRegistry();
 
   const state = () => ({
     agents: engine.listAgents(),
@@ -60,6 +63,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       return { ok: true };
     }
     if (seg[1] === "ws") return ideRoute(db, method, url, b, engine);
+    if (seg[1] === "term") return termRoute(db, terms, method, url, b, (id) => engine.runningAgent(id));
     if (p === "/api/repos") return gh.listRepos();
     if (p === "/api/sbx/policy" && method === "POST") return applySbxPolicy();
     if (p === "/api/settings" && method === "PUT") {
@@ -189,7 +193,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     if (o.uiDir && req.method === "GET" && !url.pathname.startsWith("/api/") && url.pathname !== "/ws") return serveUi(req, res, url.pathname);
     if (req.headers.authorization !== `Bearer ${o.token}` && url.searchParams.get("token") !== o.token) return void res.writeHead(401).end("unauthorized");
     // IDE routes expose file contents: loopback Host only (defence against DNS rebinding), on top of the token.
-    if (url.pathname.startsWith("/api/ws") && !/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? "")) return void res.writeHead(403).end("forbidden host");
+    if ((url.pathname.startsWith("/api/ws") || url.pathname.startsWith("/api/term")) && !/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? "")) return void res.writeHead(403).end("forbidden host");
     try {
       const out = await route(req.method ?? "GET", url, req.method === "GET" || req.method === "DELETE" ? {} : await body(req));
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out ?? { ok: true }));
@@ -199,10 +203,27 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     }
   });
   const wss = new WebSocketServer({ noServer: true });
+  const termWss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
+  const loopbackHost = (h: string | undefined) => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(h ?? "");
   api.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://x");
-    if (url.pathname !== "/ws" || url.searchParams.get("token") !== o.token) return socket.destroy();
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
+    if (url.searchParams.get("token") !== o.token) return socket.destroy();
+    if (url.pathname === "/ws") return wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws));
+    if (url.pathname !== "/term") return socket.destroy();
+    // A shell is full code execution: loopback Host (DNS rebinding) and a known Origin (cross-site pages), on top of the token.
+    const origin = req.headers.origin;
+    const port = (api.address() as { port: number }).port;
+    const originOk = !origin || ALLOWED_ORIGINS.has(origin) || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+    const session = url.searchParams.get("session") ?? "";
+    if (!loopbackHost(req.headers.host) || !originOk || !terms.get(session)) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    termWss.handleUpgrade(req, socket, head, (ws) => {
+      const detach = terms.attach(session, { send: (d) => ws.readyState === 1 && ws.send(d) });
+      ws.on("message", (d, isBinary) => terms.input(session, Buffer.isBuffer(d) ? d : Buffer.from(d as ArrayBuffer), isBinary));
+      ws.on("close", detach);
+    });
   });
   hub.on("event", (e) => {
     const msg = JSON.stringify(e);
@@ -236,7 +257,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       agent.listen(o.agentPort, o.agentBind, () => {
         const ap = (api.address() as { port: number }).port;
         const gp = (agent.address() as { port: number }).port;
-        resolve({ apiPort: ap, agentPort: gp, close: () => { api.close(); agent.close(); wss.close(); } });
+        resolve({ apiPort: ap, agentPort: gp, close: () => { terms.killAll(); api.close(); agent.close(); wss.close(); termWss.close(); } });
       });
     });
   });

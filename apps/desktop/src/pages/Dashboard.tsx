@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, GitMerge, RotateCw, ScrollText, Square } from "lucide-react";
+import { ExternalLink, FileDiff, GitMerge, RotateCw, ScrollText, Square } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api } from "../lib/api";
 import { Badge, Button, Card, Dialog, StateDot, Switch } from "../components/ui";
@@ -9,7 +9,7 @@ import type { LogEvent, Task } from "../lib/types";
 const COLUMNS: [string, string][] = [["queued", "Queued"], ["working", "Working"], ["waiting_for_guy", "Waiting for you"], ["in_review", "In review"], ["done", "Done"], ["failed", "Failed"]];
 const KIND_COLOR: Record<string, string> = { error: "text-danger", stderr: "text-warn", supervisor: "text-warn", blocked: "text-danger", tool: "text-muted-foreground", progress: "text-ok", question: "text-warn", system: "text-primary" };
 
-export function Dashboard({ goto }: { goto: (t: string) => void }) {
+export function Dashboard({ goto }: { goto: (t: string, arg?: string) => void }) {
   const { state, logs, refresh, toast } = useStore();
   const [filter, setFilter] = useState<string | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
@@ -72,6 +72,7 @@ export function Dashboard({ goto }: { goto: (t: string) => void }) {
                       {t.restart_count > 0 && <Badge tone="warn" className="mt-1">restarts {t.restart_count}</Badge>}
                       <div className="mt-2 flex flex-wrap gap-1">
                         <Button size="sm" variant="ghost" onClick={() => setLogTask(t)}><ScrollText size={12} />Log</Button>
+                        {t.branch && <Button size="sm" variant="ghost" title="Open this task's files and diff in the IDE" onClick={() => goto("ide", `t-${t.id}`)}><FileDiff size={12} />Diff</Button>}
                         {t.pr_url && <a href={t.pr_url} target="_blank" rel="noreferrer"><Button size="sm" variant="ghost"><ExternalLink size={12} />PR</Button></a>}
                         {t.status === "in_review" && <Button size="sm" onClick={() => confirm(`Squash-merge PR #${t.pr_number}?`) && wrap(() => api(`/api/tasks/${t.id}/merge`, "POST", {}))}><GitMerge size={12} />Merge</Button>}
                         {t.status === "working" && <Button size="sm" variant="outline" onClick={() => wrap(() => api(`/api/tasks/${t.id}/stop`, "POST", {}))}><Square size={12} />Stop</Button>}

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Activity, Bot, Coins, FolderGit2, HeartPulse, MessageSquare, Moon, OctagonX, Play, Settings as Cog, Sun } from "lucide-react";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { Activity, Bot, Code2, Coins, FolderGit2, HeartPulse, MessageSquare, Moon, OctagonX, Play, Settings as Cog, Sun } from "lucide-react";
 import { useStore } from "./lib/store";
 import { api } from "./lib/api";
 import { Badge, Button, Select } from "./components/ui";
@@ -12,10 +12,14 @@ import { Costs } from "./pages/Costs";
 import { Setup } from "./pages/Setup";
 import { SettingsPage } from "./pages/SettingsPage";
 
+// Monaco is heavy: load the IDE (and the editor) only when the tab is opened.
+const Ide = lazy(() => import("./pages/Ide"));
+
 const TABS = [
   { id: "dashboard", label: "Dashboard", icon: Activity },
   { id: "chief", label: "Chief", icon: MessageSquare },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "ide", label: "IDE", icon: Code2 },
   { id: "projects", label: "Projects", icon: FolderGit2 },
   { id: "costs", label: "Costs", icon: Coins },
   { id: "setup", label: "Setup", icon: HeartPulse },
@@ -26,6 +30,7 @@ type Tab = (typeof TABS)[number]["id"];
 export function App() {
   const { state, connected, error, toasts, toast, refresh } = useStore();
   const [tab, setTab] = useState<Tab>("dashboard");
+  const [ideWs, setIdeWs] = useState<string | undefined>();
   const [dark, setDark] = useState(document.documentElement.classList.contains("dark"));
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -76,8 +81,9 @@ export function App() {
         </div>
       </header>
       {s.stopped && <div className="bg-danger/15 px-4 py-1.5 text-center text-xs text-danger">Factory stopped. No agent will start until you press Resume.</div>}
-      <main className="min-h-0 flex-1 overflow-auto p-4">
-        {tab === "dashboard" && <Dashboard goto={(t) => setTab(t as Tab)} />}
+      <main className={cn("min-h-0 flex-1 p-4", tab === "ide" ? "overflow-hidden" : "overflow-auto")}>
+        {tab === "dashboard" && <Dashboard goto={(t, arg) => { if (t === "ide") setIdeWs(arg); setTab(t as Tab); }} />}
+        {tab === "ide" && <Suspense fallback={<div className="p-8 text-center text-muted-foreground">Loading the editor...</div>}><Ide initial={ideWs} /></Suspense>}
         {tab === "chief" && <Chief />}
         {tab === "agents" && <Agents />}
         {tab === "projects" && <Projects />}

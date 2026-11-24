@@ -783,65 +783,108 @@ export class Engine implements FactoryHost, IdeHost {
     return id;
   }
 
+  /** Guy's direct channel with one agent (one per agent and project). Created on first use. */
+  directThread(agentId: string, projectId: string | null): string {
+    const t = this.db.get("SELECT id FROM threads WHERE kind='direct' AND agent_id=? AND COALESCE(project_id,'')=COALESCE(?,'') ORDER BY created_at LIMIT 1", agentId, projectId);
+    if (t) return t.id as string;
+    const a = this.db.get("SELECT name FROM agents WHERE id=?", agentId);
+    const id = uid();
+    this.db.insert("threads", { id, agent_id: agentId, project_id: projectId, title: String(a?.name ?? "Agent"), kind: "direct", created_at: now() });
+    return id;
+  }
+
   /* ---------- chief chat ---------- */
   async chat(projectId: string | null, text: string): Promise<void> {
     const chief = this.listAgents().find((a) => a.role === "chief" && a.enabled);
-    const threadId = this.chiefThread(projectId);
+    return this.converse(chief, projectId, this.chiefThread(projectId), text, "chat");
+  }
+
+  /**
+   * Direct chat with any agent: a read-only one-shot turn when idle (advice only; changes go through a task),
+   * or a queued note delivered via get_task_context when the agent is busy.
+   */
+  async directChat(agentId: string, projectId: string | null, text: string): Promise<{ thread_id: string; queued: boolean }> {
+    const agent = this.listAgents().find((a) => a.id === agentId);
+    if (!agent) throw new HttpError(404, "Unknown agent");
+    if (agent.role === "chief") {
+      void this.chat(projectId, text);
+      return { thread_id: this.chiefThread(projectId), queued: false };
+    }
+    const threadId = this.directThread(agent.id, projectId);
+    if ([...this.active.values()].some((a) => a.agent.id === agent.id)) {
+      this.db.insert("messages", { id: uid(), channel: "direct", thread_id: threadId, project_id: projectId, from_id: null, to_id: agent.id, body: text, pending: 1, created_at: now() });
+      this.db.insert("messages", { id: uid(), channel: "direct", thread_id: threadId, project_id: projectId, from_id: "system", to_id: null, body: `${agent.name} is busy; your note is queued and will be delivered at its next turn.`, created_at: now() });
+      this.hub.emitEvent({ type: "messages" });
+      return { thread_id: threadId, queued: true };
+    }
+    void this.converse(agent, projectId, threadId, text, "direct");
+    return { thread_id: threadId, queued: false };
+  }
+
+  private async converse(agent: Row | undefined, projectId: string | null, threadId: string, text: string, channel: "chat" | "direct"): Promise<void> {
+    const isChief = channel === "chat";
     const mid = uid();
-    this.db.insert("messages", { id: mid, channel: "chat", thread_id: threadId, project_id: projectId, from_id: null, to_id: chief?.id ?? null, body: text, created_at: now() });
+    this.db.insert("messages", { id: mid, channel, thread_id: threadId, project_id: projectId, from_id: null, to_id: agent?.id ?? null, body: text, created_at: now() });
     this.hub.emitEvent({ type: "messages" });
     const reply = (body: string) => {
-      this.db.insert("messages", { id: uid(), channel: "chat", thread_id: threadId, project_id: projectId, from_id: chief?.id ?? "system", to_id: null, body, created_at: now() });
+      this.db.insert("messages", { id: uid(), channel, thread_id: threadId, project_id: projectId, from_id: agent?.id ?? "system", to_id: null, body, created_at: now() });
       this.hub.emitEvent({ type: "messages" });
     };
-    if (!chief) return reply("No Chief agent is enabled. Open the Agents tab, add the Chief template and switch it on.");
+    if (!agent) return reply("No Chief agent is enabled. Open the Agents tab, add the Chief template and switch it on.");
+    const label = isChief ? "Chief" : agent.name;
     if (this.settings().stopped) return reply("The factory is stopped (stop-all). Resume it first.");
-    if (this.active.has(`chief:${chief.id}`) || [...this.active.values()].some((a) => a.agent.id === chief.id)) return reply("I'm still busy with the previous message.");
-    const adapter = getAdapter(chief.provider);
+    if (this.active.has(`chief:${agent.id}`) || [...this.active.values()].some((a) => a.agent.id === agent.id)) return reply("I'm still busy with the previous message.");
+    const adapter = getAdapter(agent.provider);
     if (!adapter.executables.some((e) => which(e))) return reply(`The ${adapter.executables[0]} CLI is not installed. See the Setup tab.`);
     const project = projectId ? this.db.get("SELECT * FROM projects WHERE id=?", projectId) : undefined;
-    const act: Active = { runId: uid(), agent: chief, task: null, lastText: "", errTail: [], tokens: 0, startedAt: now() };
+    const act: Active = { runId: uid(), agent, task: null, lastText: "", errTail: [], tokens: 0, startedAt: now() };
     this.active.set(act.runId, act);
-    this.db.insert("runs", { id: act.runId, task_id: null, agent_id: chief.id, kind: "chat", runner: "host", started_at: now(), last_heartbeat_at: now() });
+    this.db.insert("runs", { id: act.runId, task_id: null, agent_id: agent.id, kind: channel, runner: "host", started_at: now(), last_heartbeat_at: now() });
     this.supervisor.start(act.runId, now());
-    this.setState(chief.id, "assign");
+    this.setState(agent.id, "assign");
     try {
-      let cwd = path.join(dataDir(), "chief");
+      let cwd = path.join(dataDir(), isChief ? "chief" : path.join("direct", agent.id));
       if (project?.kind === "github") cwd = await ensureBaseClone(project.repo, project.default_branch).catch(() => cwd);
       else if (project?.kind === "folder" && project.root_path) cwd = project.root_path;
       mkdirSync(cwd, { recursive: true });
-      const hist = this.db.all("SELECT * FROM messages WHERE channel='chat' AND COALESCE(project_id,'')=COALESCE(?,'') ORDER BY created_at DESC LIMIT ?", projectId, Math.max(2, Math.min(40, chief.context.history_size ?? 12))).reverse();
+      const hist = this.db.all("SELECT * FROM messages WHERE thread_id=? AND pending=0 ORDER BY created_at DESC LIMIT ?", threadId, Math.max(2, Math.min(40, agent.context.history_size ?? 12))).reverse();
       const prompt = [
-        project ? `Active project: ${project.repo ?? project.name} (${project.kind}, project_id=${project.id}).${project.kind === "github" ? " Use this project_id with create_issue." : " This project has no GitHub repo, so create_issue is not available for it."}` : "No project is selected. Ask Guy to pick one before creating issues.",
+        isChief
+          ? project ? `Active project: ${project.repo ?? project.name} (${project.kind}, project_id=${project.id}).${project.kind === "github" ? " Use this project_id with create_issue." : " This project has no GitHub repo, so create_issue is not available for it."}` : "No project is selected. Ask Guy to pick one before creating issues."
+          : `This is a direct, read-only chat with Guy${project ? ` about project ${project.repo ?? project.name}` : ""}. Answer and advise only: do not change files. Anything that changes files must become a task (ask Guy to hand it to the Chief).`,
         "Conversation so far:",
-        ...hist.slice(0, -1).map((m) => `${m.from_id === null ? "Guy" : "Chief"}: ${m.body}`),
+        ...hist.filter((m) => m.id !== mid).map((m) => `${m.from_id === null ? "Guy" : label}: ${m.body}`),
         `Guy: ${text}`,
       ].join("\n");
       const env = this.env(act);
       const dir = path.join(dataDir(), "runs", act.runId);
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "mcp.json"), this.mcpConfig(act, env));
-      const cmd = adapter.buildCommand({ prompt, systemPrompt: buildInstructions(project, chief, []), model: chief.model, effort: chief.effort, cwd, sandboxed: false, readOnly: true, mcpConfigPath: path.join(dir, "mcp.json"), factoryMcpUrl: env.SF_FACTORY_URL, maxTurns: 12 });
+      const cmd = adapter.buildCommand({ prompt, systemPrompt: buildInstructions(project, agent, []), model: agent.model, effort: agent.effort, cwd, sandboxed: false, readOnly: true, mcpConfigPath: path.join(dir, "mcp.json"), factoryMcpUrl: env.SF_FACTORY_URL, maxTurns: isChief ? 12 : 6 });
       const ws: Workspace = { kind: "worktree", hostDir: cwd, cwd, exec: (argv, o) => stream(argv, { cwd, env: o.env, stdin: o.stdin, onLine: o.onLine }), sh: async () => ({ code: 0, stdout: "", stderr: "" }), writeFiles: async () => {}, push: async () => ({ code: 0, stdout: "", stderr: "" }), destroy: async () => {} };
       act.ws = ws;
-      const texts: string[] = [];
-      const orig = act.lastText;
-      void orig;
       const code = await this.spawnAgent(act, ws, cmd.argv, cmd.stdin, { ...env, GITHUB_TOKEN: "" });
-      void texts;
       const out = act.done?.summary || act.lastText;
       if (act.control?.kind === "ask") return; // question already queued in the inbox
-      if (code !== 0 && !out) reply(`Chief failed: ${act.errTail.join(" | ").slice(0, 300) || `exit code ${code}`}`);
+      if (code !== 0 && !out) reply(`${label} failed: ${act.errTail.join(" | ").slice(0, 300) || `exit code ${code}`}`);
       else reply(out || "(no reply)");
     } catch (e) {
-      reply(`Chief failed: ${e instanceof Error ? e.message : String(e)}`);
+      reply(`${label} failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       this.supervisor.end(act.runId);
       this.active.delete(act.runId);
       this.db.update("runs", act.runId, { ended_at: now(), exit_reason: "ok", tokens: act.tokens });
-      this.setState(chief.id, "finish");
+      this.setState(agent.id, "finish");
       this.hub.emitEvent({ type: "costs" });
     }
+  }
+
+  /** Queued direct-chat notes for an agent; marks them delivered. */
+  takeNotes(agentId: string): string[] {
+    const rows = this.db.all("SELECT id, body FROM messages WHERE pending=1 AND to_id=? ORDER BY created_at", agentId);
+    for (const r of rows) this.db.run("UPDATE messages SET pending=0 WHERE id=?", r.id);
+    if (rows.length) this.hub.emitEvent({ type: "messages" });
+    return rows.map((r) => String(r.body));
   }
 
   /* ---------- questions ---------- */
@@ -870,9 +913,10 @@ export class Engine implements FactoryHost, IdeHost {
   }
   async getTaskContext(runId: string): Promise<unknown> {
     const a = this.act(runId);
-    if (!a.task) return { note: "chat session: no task" };
+    const notes = this.takeNotes(a.agent.id);
+    if (!a.task) return { note: "chat session: no task", notes_from_guy: notes };
     const t = this.db.get("SELECT * FROM tasks WHERE id=?", a.task.id)!;
-    return { title: t.title, body: t.body, issue: t.issue_number, branch: t.branch, summary: t.summary, restart_count: t.restart_count, answers: this.db.all("SELECT body AS question, answer FROM questions WHERE task_id=? AND answer IS NOT NULL", t.id) };
+    return { title: t.title, body: t.body, issue: t.issue_number, branch: t.branch, summary: t.summary, restart_count: t.restart_count, answers: this.db.all("SELECT body AS question, answer FROM questions WHERE task_id=? AND answer IS NOT NULL", t.id), notes_from_guy: notes };
   }
   async reportProgress(runId: string, summary: string, percent?: number): Promise<string> {
     const a = this.act(runId);

@@ -1,3 +1,4 @@
+import { api } from "./api";
 import type { LogEvent, Message } from "./types";
 
 /** Agent workspace drawer tabs (docs/PHASE2.md 2.7b). */
@@ -24,6 +25,15 @@ export const clampWidth = (w: number, viewport: number) => Math.round(Math.max(D
 /** Messages the agent sent or received (its direct thread plus bus traffic), oldest first. */
 export const agentMessages = (msgs: Message[], agentId: string) =>
   msgs.filter((m) => m.from_id === agentId || m.to_id === agentId).sort((a, b) => a.created_at - b.created_at);
+
+/** Bus messages plus Guy's direct threads with the agent, deduplicated. */
+export async function loadAgentMessages(agentId: string): Promise<Message[]> {
+  const [bus, threads] = await Promise.all([api<Message[]>("/api/bus"), api<{ id: string; kind: string; agent_id: string | null }[]>("/api/threads")]);
+  const direct = await Promise.all(threads.filter((t) => t.kind === "direct" && t.agent_id === agentId).map((t) => api<Message[]>(`/api/threads/${t.id}/messages`)));
+  const seen = new Map<string, Message>();
+  for (const m of [...bus, ...direct.flat()]) seen.set(m.id, m);
+  return [...seen.values()];
+}
 
 /** The agent's live events, newest `limit` kept. */
 export const agentLogs = (logs: LogEvent[], agentId: string, limit = 300) => logs.filter((l) => l.agent_id === agentId).slice(-limit);

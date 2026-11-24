@@ -125,6 +125,8 @@ UPDATE questions SET status='answered' WHERE answer IS NOT NULL;`);
       }
     },
   },
+  // v8: direct-chat messages sent while the agent is busy are queued (pending=1) until its next get_task_context.
+  { version: 8, name: "pending_notes", up: (db) => db.exec("ALTER TABLE messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0") },
 ];
 
 export class Db {

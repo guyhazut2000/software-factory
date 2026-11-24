@@ -4,7 +4,7 @@ import { useStore } from "../lib/store";
 import { api } from "../lib/api";
 import { ago, cn, fmtTokens } from "../lib/utils";
 import { activityQuery, type Activity } from "../lib/activity";
-import { agentLogs, agentMessages, clampWidth, recreateHint, DRAWER_TABS, onOpenAgent, taskWorkspace, type DrawerTab } from "../lib/drawer";
+import { agentLogs, agentMessages, loadAgentMessages, clampWidth, recreateHint, DRAWER_TABS, onOpenAgent, taskWorkspace, type DrawerTab } from "../lib/drawer";
 import type { Agent, Message } from "../lib/types";
 import { Badge, Button, StateDot } from "./ui";
 import { AgentForm } from "./AgentForm";
@@ -21,6 +21,7 @@ export function AgentDrawer({ gotoIde }: { gotoIde: (wid: string) => void }) {
   const [width, setWidth] = useState(() => clampWidth(Number(localStorage.getItem("sf-drawer-w")) || 720, window.innerWidth));
   const [act, setAct] = useState<Activity>({ live: [], history: [] });
   const [msgs, setMsgs] = useState<Message[]>([]);
+  const [draft, setDraft] = useState("");
   const [edit, setEdit] = useState<Partial<Agent> | null>(null);
   const drag = useRef(false);
 
@@ -32,7 +33,10 @@ export function AgentDrawer({ gotoIde }: { gotoIde: (wid: string) => void }) {
   }, [target, activityTick]);
   useEffect(() => {
     if (target?.tab !== "messages") return;
-    api<Message[]>("/api/bus").then(setMsgs).catch((e) => toast(String(e.message ?? e)));
+    const load = () => loadAgentMessages(target.id).then(setMsgs).catch((e) => toast(String(e.message ?? e)));
+    void load();
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
   }, [target, activityTick, toast]);
   useEffect(() => {
     const move = (e: MouseEvent) => { if (drag.current) setWidth(clampWidth(window.innerWidth - e.clientX, window.innerWidth)); };
@@ -108,8 +112,18 @@ export function AgentDrawer({ gotoIde }: { gotoIde: (wid: string) => void }) {
         );
       case "messages": {
         const own = agentMessages(msgs, agent.id);
-        if (!own.length) return <Empty>No messages yet.</Empty>;
-        return <div className="grid gap-2 p-3 text-sm">{own.map((m) => <div key={m.id} className={cn("rounded-md border p-2", m.from_id === agent.id ? "bg-muted/50" : "")}><div className="mb-0.5 text-xs text-muted-foreground">{m.from_id === agent.id ? "sent" : `from ${state.agents.find((a) => a.id === m.from_id)?.name ?? m.from_id ?? "Guy"}`} · {ago(m.created_at)} ago</div><div className="whitespace-pre-wrap break-words">{m.body}</div></div>)}</div>;
+        const send = () => draft.trim() && wrap(async () => {
+          const r = await api<{ queued: boolean }>("/api/threads/direct", "POST", { agent_id: agent.id, project_id: agent.project_id ?? null, text: draft.trim() });
+          setDraft("");
+          if (r.queued) toast(`${agent.name} is busy: note queued for its next turn`);
+          setMsgs(await loadAgentMessages(agent.id));
+        });
+        return <div className="flex h-full flex-col"><div className="min-h-0 flex-1 overflow-auto">{!own.length ? <Empty>No messages yet.</Empty> : <div className="grid gap-2 p-3 text-sm">{own.map((m) => <div key={m.id} className={cn("rounded-md border p-2", m.from_id === agent.id ? "bg-muted/50" : "")}><div className="mb-0.5 text-xs text-muted-foreground">{m.from_id === agent.id ? "sent" : `from ${state.agents.find((a) => a.id === m.from_id)?.name ?? m.from_id ?? "Guy"}`} · {ago(m.created_at)} ago</div><div className="whitespace-pre-wrap break-words">{m.body}</div></div>)}</div>}</div>
+          <form className="flex gap-2 border-t p-2" onSubmit={(e) => { e.preventDefault(); send(); }}>
+            <input aria-label={`Message ${agent.name}`} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`Ask ${agent.name} (read-only advice; changes go through a task)`} className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm" />
+            <Button size="sm" type="submit" disabled={!draft.trim()}>Send</Button>
+          </form>
+        </div>;
       }
       case "log": {
         const own = agentLogs(logs, agent.id);

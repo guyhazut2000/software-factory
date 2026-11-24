@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Github, Lock, Plus, Tags, Trash2 } from "lucide-react";
+import { FolderOpen, Github, Lock, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api, inTauri, tauri } from "../lib/api";
 import { Badge, Button, Card, Dialog, Input, Label, Select, Textarea } from "../components/ui";
@@ -14,6 +14,8 @@ export function Projects() {
   const [repos, setRepos] = useState<Repo[] | null>(null);
   const [q, setQ] = useState("");
   const [create, setCreate] = useState({ name: "", private: true });
+  const [local, setLocal] = useState({ kind: "folder" as "folder" | "none", name: "", root_path: "" });
+  const [relink, setRelink] = useState<{ project: Project; name: string; root_path: string } | null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
   const [newTask, setNewTask] = useState<{ project: Project; title: string; body: string; agent: string } | null>(null);
   const wrap = (fn: () => Promise<unknown>) => fn().then(refresh).catch((e) => toast(String(e.message ?? e)));
@@ -51,13 +53,25 @@ export function Projects() {
               <div className="min-w-0 flex-1"><div className="font-medium">{projectLabel(p)} {p.kind !== "github" && <Badge>{p.kind}</Badge>}</div><div className="text-xs text-muted-foreground">{state.tasks.filter((t) => t.project_id === p.id).length} tasks{p.kind === "github" ? ` / branch ${p.default_branch}` : p.root_path ? ` / ${p.root_path}` : ""}</div></div>
               {p.kind === "github" && <Button size="sm" onClick={() => setNewTask({ project: p, title: "", body: "", agent: "" })}><Plus size={13} />Task</Button>}
               <Button size="sm" variant="outline" onClick={() => setEditing(p)}>Instructions</Button>
+              {p.kind !== "github" && <Button size="icon" variant="ghost" title={p.kind === "folder" ? "Rename or relink folder" : "Rename"} onClick={() => setRelink({ project: p, name: p.name, root_path: p.root_path ?? "" })}>{p.kind === "folder" ? <FolderOpen size={14} /> : <Pencil size={14} />}</Button>}
               {p.kind === "github" && <Button size="icon" variant="ghost" title="Create status:* and agent:* labels" onClick={() => wrap(() => api(`/api/projects/${p.id}/labels`, "POST", {}))}><Tags size={14} /></Button>}
               <Button size="icon" variant="ghost" title="Unlink" onClick={() => confirm(`Unlink ${projectLabel(p)}? (${p.kind === "github" ? "The repo" : "The folder"} is untouched)`) && wrap(() => api(`/api/projects/${p.id}`, "DELETE"))}><Trash2 size={14} /></Button>
             </Card>
           ))}
-          {state.projects.length === 0 && <Card className="p-6 text-center text-muted-foreground">No projects linked yet. Browse your repos or create a new one.</Card>}
+          {state.projects.length === 0 && <Card className="p-6 text-center text-muted-foreground">No projects linked yet. Browse your repos, create a new one, or add a local folder.</Card>}
         </div>
       </div>
+
+      <Card className="p-4">
+        <div className="mb-1 font-medium">Add a local project</div>
+        <div className="mb-2 text-xs text-muted-foreground">A folder on this machine (git or not), or "none": a container for loose tasks and automations. Nothing goes to GitHub.</div>
+        <div className="flex gap-2">
+          <Select aria-label="Project kind" value={local.kind} onChange={(e) => setLocal({ ...local, kind: e.target.value as "folder" | "none" })}><option value="folder">Folder</option><option value="none">None</option></Select>
+          {local.kind === "folder" && <Input aria-label="Folder path" placeholder={"C:\\Users\\me\\data or /home/me/data"} value={local.root_path} onChange={(e) => setLocal({ ...local, root_path: e.target.value })} />}
+          <Input aria-label="Project name" placeholder={local.kind === "folder" ? "name (optional)" : "Personal"} value={local.name} onChange={(e) => setLocal({ ...local, name: e.target.value })} />
+          <Button disabled={local.kind === "folder" ? !local.root_path.trim() : !local.name.trim()} onClick={() => wrap(async () => { await api("/api/projects", "POST", local); setLocal({ ...local, name: "", root_path: "" }); })}>Add</Button>
+        </div>
+      </Card>
 
       <Card className="p-4">
         <div className="mb-2 font-medium">Create a new repository</div>
@@ -74,6 +88,16 @@ export function Projects() {
             return <div key={r.full_name} className="flex items-center gap-2 border-b py-2"><div className="min-w-0 flex-1"><div className="truncate">{r.full_name} {r.private && <Lock size={11} className="inline" />}</div><div className="truncate text-xs text-muted-foreground">{r.description}</div></div><Button size="sm" disabled={linked} onClick={() => link(r.full_name)}>{linked ? "Linked" : "Link"}</Button></div>;
           })}
         </div>
+      </Dialog>
+
+      <Dialog open={!!relink} onClose={() => setRelink(null)} title={relink?.project.kind === "folder" ? "Rename or relink folder" : "Rename project"}>
+        {relink && (
+          <div className="grid gap-3">
+            <div><Label>Name</Label><Input value={relink.name} onChange={(e) => setRelink({ ...relink, name: e.target.value })} /></div>
+            {relink.project.kind === "folder" && <div><Label>Folder path</Label><Input value={relink.root_path} onChange={(e) => setRelink({ ...relink, root_path: e.target.value })} /><div className="mt-1 text-xs text-muted-foreground">Point at the folder's new location if you moved it. Files are never moved or deleted.</div></div>}
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setRelink(null)}>Cancel</Button><Button disabled={!relink.name.trim()} onClick={() => wrap(async () => { const pr = relink.project; await api(`/api/projects/${pr.id}`, "PUT", { name: relink.name, ...(pr.kind === "folder" && relink.root_path !== pr.root_path ? { root_path: relink.root_path } : {}) }); setRelink(null); })}>Save</Button></div>
+          </div>
+        )}
       </Dialog>
 
       <Dialog open={!!editing} onClose={() => setEditing(null)} title={`Instructions: ${editing ? projectLabel(editing) : ""}`} wide>

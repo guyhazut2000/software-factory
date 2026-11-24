@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -74,6 +74,14 @@ describe("api", () => {
     expect((await call("POST", "/api/tasks", { project_id: n.json.id, title: "x" })).status).toBe(400);
     const st = (await call("GET", "/api/state")).json;
     expect(st.projects.map((p: { kind: string }) => p.kind)).toEqual(expect.arrayContaining(["folder", "none"]));
+    const dir2 = mkdtempSync(path.join(tmpdir(), "sf-proj2-"));
+    expect((await call("PUT", `/api/projects/${f.json.id}`, { root_path: dir2, name: "Data" })).status).toBe(200);
+    const fp = (await call("GET", "/api/state")).json.projects.find((p: { id: string }) => p.id === f.json.id);
+    expect(fp).toMatchObject({ root_path: realpathSync(dir2), name: "Data" });
+    expect((await call("PUT", `/api/projects/${f.json.id}`, { root_path: path.join(dir2, "gone") })).status).toBe(400);
+    expect((await call("PUT", `/api/projects/${n.json.id}`, { root_path: dir2 })).status).toBe(400);
+    expect((await call("PUT", `/api/projects/${n.json.id}`, { name: "Finance" })).status).toBe(200);
+    expect((await call("PUT", `/api/projects/${n.json.id}`, { name: " " })).status).toBe(400);
     await call("DELETE", `/api/projects/${f.json.id}`);
     await call("DELETE", `/api/projects/${n.json.id}`);
   });
@@ -88,14 +96,19 @@ describe("api", () => {
     expect((await call("GET", `/api/ws/${wid}/file?path=../x`)).status).toBe(400);
     expect((await call("GET", `/api/ws/${wid}/git/log`)).json).toEqual([]);
     expect((await call("GET", `/api/ws/p-nope/tree`)).status).toBe(404);
-    expect((await call("PUT", `/api/ws/${wid}/file?path=notes.md`, { content: "x", base_sha: null })).status).toBe(403);
-    expect((await call("POST", `/api/ws/${wid}/fs`, { op: "delete", path: "notes.md" })).status).toBe(403);
+    const cur = (await call("GET", `/api/ws/${wid}/file?path=notes.md`)).json;
+    expect((await call("PUT", `/api/ws/${wid}/file?path=notes.md`, { content: "edited", base_sha: cur.sha256 })).status).toBe(200);
+    expect(readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("edited");
+    expect((await call("PUT", `/api/ws/${wid}/file?path=notes.md`, { content: "y", base_sha: cur.sha256 })).status).toBe(409);
     expect((await call("GET", `/api/ws/..%2F..%2Fetc/tree`)).status).toBe(400);
     const r = await new Promise<number>((resolve) => {
       const req = http.request({ host: "127.0.0.1", port: srv.apiPort, path: `/api/ws/${wid}/tree`, headers: { host: "evil.example", authorization: "Bearer t" } }, (res) => resolve(res.statusCode ?? 0));
       req.end();
     });
     expect(r).toBe(403);
+    rmSync(dir, { recursive: true, force: true });
+    expect((await call("GET", "/api/ws")).json.find((w: { id: string }) => w.id === wid)).toMatchObject({ read_only: true, exists: false });
+    expect((await call("PUT", `/api/ws/${wid}/file?path=n.md`, { content: "x", base_sha: null })).status).toBe(403);
     await call("DELETE", `/api/projects/${f.id}`);
   });
   it("IDE task workspace: diff of a pushed task branch against the default branch", async () => {

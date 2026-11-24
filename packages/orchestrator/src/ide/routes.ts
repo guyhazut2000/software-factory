@@ -14,7 +14,7 @@ export interface IdeHost {
 }
 
 /** Writable: Guy's own clone, or a task workspace Guy has taken over. Mirrors, folders and agent-owned workspaces stay read-only. */
-const writable = (w: IdeWorkspace) => !w.read_only && !w.ref && (w.kind === "mine" ? !!w.exists : w.kind === "task" && w.lease?.owner === "guy");
+const writable = (w: IdeWorkspace) => !w.read_only && !w.ref && (w.kind === "mine" || w.kind === "folder" ? !!w.exists : w.kind === "task" && w.lease?.owner === "guy");
 
 const showSecrets = (db: Db, w: IdeWorkspace) => !!w.project_id && db.getSetting<string[]>("show_secrets", []).includes(w.project_id);
 

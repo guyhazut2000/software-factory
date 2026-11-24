@@ -9,7 +9,7 @@ import { healthChecks } from "./health.js";
 import { TEMPLATES } from "./templates.js";
 import { bootstrapLabels, getToken, gh, setToken } from "./github.js";
 import { ensureBaseClone, applySbxPolicy, repoDirFor } from "./workspace.js";
-import { newLocalProject } from "./projects.js";
+import { newLocalProject, projectPatch } from "./projects.js";
 import { ideRoute } from "./ide/routes.js";
 import { TermRegistry } from "./term/pty.js";
 import { termRoute } from "./term/routes.js";
@@ -108,7 +108,10 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     }
     if (seg[1] === "projects" && id) {
       if (method === "PUT") {
-        db.update("projects", id, { instructions: String(b.instructions ?? "") });
+        const pr = db.get("SELECT * FROM projects WHERE id=?", id);
+        if (!pr) throw new Error("project not found");
+        const patch = projectPatch(db, pr, b);
+        if (Object.keys(patch).length) db.update("projects", id, patch);
         hub.emitEvent({ type: "projects" });
         return { ok: true };
       }

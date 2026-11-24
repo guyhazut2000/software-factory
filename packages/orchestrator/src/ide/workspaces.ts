@@ -57,7 +57,7 @@ export function createMyWorkspace(db: Db, projectId: string): IdeWorkspace {
 function projectWs(p: Row): IdeWorkspace | undefined {
   if (!p.root_path) return undefined;
   if (p.kind === "github") return { id: `p-${p.id}`, label: `${p.repo} (main mirror)`, kind: "main", project_id: p.id, root: p.root_path, git: true, read_only: true, note: "The orchestrator resets this clone on every sync, so it is read-only." };
-  if (p.kind === "folder") return { id: `p-${p.id}`, label: p.name, kind: "folder", project_id: p.id, root: p.root_path, git: isGitDir(p.root_path), read_only: true };
+  if (p.kind === "folder") return { id: `p-${p.id}`, label: p.name, kind: "folder", exists: existsSync(p.root_path), project_id: p.id, root: p.root_path, git: isGitDir(p.root_path), read_only: !existsSync(p.root_path), note: existsSync(p.root_path) ? "Your folder on disk: edits are saved in place." : "Folder not found: relink it on the Projects page." };
   return undefined;
 }
 

@@ -28,11 +28,16 @@ export function getConn(): Promise<Conn> {
   return conn;
 }
 
+/** Non-2xx API response; keeps the status and JSON body (e.g. a 409 conflict's `current_sha`). */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public body: Record<string, unknown>) { super(message); }
+}
+
 export async function api<T = unknown>(path: string, method = "GET", body?: unknown): Promise<T> {
   const c = await getConn();
   const r = await fetch(c.base + path, { method, headers: { authorization: `Bearer ${c.token}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (r.status === 401) throw new Error("TOKEN_MISMATCH");
-  if (!r.ok) throw new Error((j as { error?: string }).error ?? `HTTP ${r.status}`);
+  if (!r.ok) throw new ApiError((j as { error?: string }).error ?? `HTTP ${r.status}`, r.status, j as Record<string, unknown>);
   return j as T;
 }

@@ -5,6 +5,8 @@ import type { LogEvent, State } from "./types";
 interface Ctx {
   state: State | null;
   logs: LogEvent[];
+  /** Bumped on every WS `activity` event so the Activity tab can refetch with its filters. */
+  activityTick: number;
   connected: boolean;
   error: string | null;
   refresh: () => void;
@@ -31,6 +33,7 @@ async function desktopNotify(title: string, body: string) {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State | null>(null);
   const [logs, setLogs] = useState<LogEvent[]>([]);
+  const [activityTick, setActivityTick] = useState(0);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<{ id: number; m: string }[]>([]);
@@ -66,6 +69,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         ws.onmessage = (m) => {
           const e = JSON.parse(m.data);
           if (e.type === "log") setLogs((p) => [...p.slice(-499), e]);
+          else if (e.type === "activity") setActivityTick((n) => n + 1);
           else if (e.type === "notify") { desktopNotify(e.title, e.body); toast(`${e.title}: ${e.body}`); refresh(); }
           else refresh();
         };
@@ -78,5 +82,5 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { closed = true; ws?.close(); };
   }, [refresh, toast]);
 
-  return <C.Provider value={{ state, logs, connected, error, refresh, toast, toasts }}>{children}</C.Provider>;
+  return <C.Provider value={{ state, logs, activityTick, connected, error, refresh, toast, toasts }}>{children}</C.Provider>;
 }

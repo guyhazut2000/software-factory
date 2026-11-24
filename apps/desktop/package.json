@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc -p .",
-    "test": "echo \"no tests yet\"",
+    "test": "vitest run",
     "tauri": "tauri"
   },
   "dependencies": {

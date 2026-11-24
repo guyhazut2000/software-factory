@@ -21,7 +21,7 @@ export function Dashboard({ goto }: { goto: (t: string) => void }) {
   useEffect(() => { if (logTask) api<LogEvent[]>(`/api/tasks/${logTask.id}/log`).then(setTaskLog).catch(() => {}); }, [logTask, logs.length]);
   if (!state) return null;
   const agentName = (id: string | null) => state.agents.find((a) => a.id === id)?.name ?? "";
-  const project = (id: string) => state.projects.find((p) => p.id === id)?.name ?? "";
+  const project = (id: string | null) => state.projects.find((p) => p.id === id)?.name ?? "";
 
   return (
     <div className="flex h-full flex-col gap-4">

@@ -224,6 +224,23 @@ describe("api", () => {
     expect(db.get("SELECT status FROM questions WHERE id=?", q.id)!.status).toBe("answered");
     expect(db.get("SELECT thread_id FROM messages WHERE body='(answer) yes'")!.thread_id).toBe(threads[0].id);
   });
+  it("direct chat: one direct thread per agent; busy agent gets a queued note via get_task_context", async () => {
+    db.insert("agents", { ...db.get("SELECT * FROM agents LIMIT 1")!, id: "dag", name: "Advisor", role: "developer", created_at: 1 });
+    engine.active.set("run-busy", { runId: "run-busy", agent: { id: "dag", name: "Advisor" }, task: null, lastText: "", errTail: [], tokens: 0, startedAt: 0 } as never);
+    const r = (await call("POST", "/api/threads/direct", { agent_id: "dag", project_id: "dthr", text: "please also add docs" })).json;
+    expect(r.queued).toBe(true);
+    const r2 = (await call("POST", `/api/threads/${r.thread_id}/messages`, { text: "and tests" })).json;
+    expect(r2).toMatchObject({ thread_id: r.thread_id, queued: true });
+    const threads = (await call("GET", "/api/threads?project_id=dthr")).json;
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({ kind: "direct", agent_id: "dag", title: "Advisor" });
+    const ctx = (await engine.getTaskContext("run-busy")) as { notes_from_guy: string[] };
+    expect(ctx.notes_from_guy).toEqual(["please also add docs", "and tests"]);
+    expect(((await engine.getTaskContext("run-busy")) as { notes_from_guy: string[] }).notes_from_guy).toEqual([]);
+    engine.active.delete("run-busy");
+    expect((await call("POST", "/api/threads/direct", { agent_id: "nope", text: "x" })).status).toBe(404);
+    expect((await call("POST", "/api/threads/nope/messages", { text: "x" })).status).toBe(404);
+  });
   it("agent listener rejects unknown runs", async () => {
     const r = await fetch(`http://127.0.0.1:${srv.agentPort}/mcp/nope`, { method: "POST", body: "{}" });
     expect(r.status).toBe(404);

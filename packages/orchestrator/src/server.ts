@@ -172,6 +172,13 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     }
     if (seg[1] === "threads" && id && act === "messages" && method === "GET")
       return db.all("SELECT * FROM messages WHERE thread_id=? ORDER BY created_at DESC LIMIT 200", id).reverse();
+    if (p === "/api/threads/direct" && method === "POST") return await engine.directChat(String(b.agent_id), b.project_id ?? null, String(b.text));
+    if (seg[1] === "threads" && id && act === "messages" && method === "POST") {
+      const t = db.get("SELECT * FROM threads WHERE id=?", id);
+      if (!t) throw Object.assign(new Error("Unknown thread"), { status: 404 });
+      if (t.kind === "chief") return void engine.chat(t.project_id ?? null, String(b.text)), { thread_id: t.id, queued: false };
+      return await engine.directChat(String(t.agent_id), t.project_id ?? null, String(b.text));
+    }
     if (p === "/api/bus") return db.all("SELECT * FROM messages WHERE channel='bus' ORDER BY created_at DESC LIMIT 100").reverse();
     if (p === "/api/chat" && method === "POST") {
       void engine.chat(b.project_id ?? null, String(b.text));

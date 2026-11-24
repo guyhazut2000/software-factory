@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { existsSync, statSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { IPty } from "@lydell/node-pty";
 import { uid } from "../util.js";
@@ -12,7 +12,9 @@ let loadError = "";
 export function loadPty(): PtyModule | null {
   if (cached !== undefined) return cached;
   try {
-    cached = createRequire(import.meta.url)("@lydell/node-pty") as PtyModule;
+    const req = createRequire(import.meta.url);
+    cached = req("@lydell/node-pty") as PtyModule;
+    if (process.platform !== "win32") ensureSpawnHelperExecutable(req);
   } catch (e) {
     cached = null;
     loadError = e instanceof Error ? e.message : String(e);
@@ -20,6 +22,31 @@ export function loadPty(): PtyModule | null {
   return cached;
 }
 export const ptyError = () => loadError;
+
+/** macOS/Linux: node-pty execs prebuilds/<plat>/spawn-helper; installers and npm tarballs can drop its exec bit. */
+export function ensureSpawnHelperExecutable(req: NodeRequire): string | null {
+  const plat = `${process.platform}-${process.arch}`;
+  let helper: string;
+  try {
+    const wrapperEntry = req.resolve("@lydell/node-pty");
+    let dir = path.dirname(createRequire(wrapperEntry).resolve(`@lydell/node-pty-${plat}`));
+    while (!existsSync(path.join(dir, "package.json")) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+    helper = path.join(dir, "prebuilds", plat, "spawn-helper");
+  } catch {
+    return null;
+  }
+  if (!existsSync(helper)) return null;
+  try {
+    accessSync(helper, constants.X_OK);
+  } catch {
+    try {
+      chmodSync(helper, 0o755);
+    } catch {
+      /* read-only install dir: spawn will fail and surface the error */
+    }
+  }
+  return helper;
+}
 
 export function defaultShell(): { file: string; args: string[] } {
   if (process.platform === "win32") return { file: process.env.COMSPEC || "cmd.exe", args: [] };

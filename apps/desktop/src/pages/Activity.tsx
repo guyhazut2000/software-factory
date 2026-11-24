@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FileDiff } from "lucide-react";
 import { useStore } from "../lib/store";
 import { api } from "../lib/api";
-import { Badge, Card, Dialog, Select, StateDot } from "../components/ui";
+import { Badge, Button, Card, Dialog, Select, StateDot } from "../components/ui";
 import { ago, cn, fmtTokens } from "../lib/utils";
 import { activityQuery, groupByProject, heartbeatTone, type Activity, type ActivityRow } from "../lib/activity";
 import type { LogEvent } from "../lib/types";
+import { openAgent } from "../lib/drawer";
 
 const TONE: Record<string, string> = { ok: "text-ok", warn: "text-warn", danger: "text-danger" };
 
@@ -40,7 +41,7 @@ export function ActivityPage() {
       <tbody>
         {rows.map((r) => (
           <tr key={r.run_id} onClick={() => setOpen(r)} className="cursor-pointer border-t hover:bg-muted/50" title="Open the live log">
-            <td className="px-3 py-1.5"><span className="flex items-center gap-2"><StateDot state={r.state ?? ""} />{r.agent ?? r.agent_id}</span></td>
+            <td className="px-3 py-1.5"><button className="flex cursor-pointer items-center gap-2 hover:underline" title="Open the agent drawer" onClick={(e) => { e.stopPropagation(); openAgent(r.agent_id); }}><StateDot state={r.state ?? ""} />{r.agent ?? r.agent_id}</button></td>
             <td className="max-w-[18rem] truncate">{r.task ?? <span className="text-muted-foreground">{r.kind ?? "-"}</span>}{r.task_type && r.task_type !== "code" && <Badge className="ml-1">{r.task_type}</Badge>}</td>
             <td>{r.status ?? "-"}{!live && r.exit_reason && <span className="ml-1 text-xs text-muted-foreground">({r.exit_reason})</span>}</td>
             <td className="font-mono text-xs">
@@ -83,6 +84,10 @@ export function ActivityPage() {
         {data.history.length ? table(data.history, false) : <div className="p-4 text-center text-sm text-muted-foreground">No finished runs yet.</div>}
       </Card>
       <Dialog open={!!open} onClose={() => setOpen(null)} title={`${open?.agent ?? ""}${open?.task ? `: ${open.task}` : ""}`} wide>
+        {open && <div className="mb-2 flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => { openAgent(open.agent_id); setOpen(null); }}>Open agent drawer</Button>
+          {open.task_id && <Button size="sm" variant="outline" onClick={() => { openAgent(open.agent_id, "diff"); setOpen(null); }}><FileDiff size={12} />Task diff</Button>}
+        </div>}
         <div className="max-h-[60vh] overflow-auto rounded-md bg-muted p-2 font-mono text-[11px]">
           {runLog.map((l, i) => <div key={i} className="whitespace-pre-wrap break-words"><span className="text-muted-foreground">{new Date(l.ts).toLocaleTimeString()} {l.kind} </span>{l.text}</div>)}
           {runLog.length === 0 && <div className="text-muted-foreground">{open?.last_event ? `${open.last_event.kind}: ${open.last_event.text}` : "No log yet."}</div>}

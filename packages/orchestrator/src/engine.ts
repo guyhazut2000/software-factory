@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAdapter, type AgentEvent } from "@sf/adapters";
 import type { Db, Row } from "./db.js";
@@ -15,8 +15,11 @@ import { createSbx, createWorktree, ensureBaseClone, skillFiles, type Workspace 
 import { formatFindings, runScanners } from "./scanners.js";
 import type { FactoryHost } from "./mcp.js";
 import { dataDir, now, slug, uid, which, stream } from "./util.js";
+import { HttpError } from "./ide/paths.js";
+import { taskWorktreeDir } from "./ide/workspaces.js";
+import type { IdeHost } from "./ide/routes.js";
 
-type Control = { kind: "ask" | "restart" | "stop" | "stuck" | "timeout" | "budget"; reason: string; fresh?: boolean };
+type Control = { kind: "ask" | "restart" | "stop" | "stuck" | "timeout" | "budget" | "takeover"; reason: string; fresh?: boolean };
 
 interface Active {
   runId: string;
@@ -55,7 +58,7 @@ const claudeHooks = () => {
   return JSON.stringify({ hooks: { PreToolUse: h("pre"), PostToolUse: h("post"), Stop: [{ hooks: [{ type: "command", command: "node .sf/hook.mjs stop" }] }] } });
 };
 
-export class Engine implements FactoryHost {
+export class Engine implements FactoryHost, IdeHost {
   scheduler = new Scheduler(3);
   supervisor = new Supervisor();
   active = new Map<string, Active>();
@@ -287,6 +290,54 @@ export class Engine implements FactoryHost {
     await this.setIssueStatus(p, t.issue_number, "done");
   }
 
+  /* ---------- IDE edit leases ---------- */
+  runningAgent(taskId: string): string | undefined {
+    for (const a of this.active.values()) if (a.task?.id === taskId) return a.agent.name;
+    return undefined;
+  }
+  /** Take over a task workspace: soft-stop the run (checkpoint), lease it to Guy and make sure a local worktree exists. */
+  async takeOver(taskId: string, waitMs = 60_000): Promise<void> {
+    const t = this.db.get("SELECT * FROM tasks WHERE id=?", taskId);
+    if (!t || t.type !== "code" || !t.branch) throw new HttpError(400, "only code tasks with a branch can be taken over");
+    if (t.status === "done") throw new HttpError(400, "the task is done");
+    const act = [...this.active.values()].find((a) => a.task?.id === taskId);
+    if (act) {
+      act.control = { kind: "takeover", reason: "Guy took over the workspace" };
+      act.kill?.();
+      const until = Date.now() + waitMs;
+      while (this.active.has(act.runId)) {
+        if (Date.now() > until) throw new HttpError(504, "the agent did not stop in time; try again");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    const cur = this.db.get("SELECT * FROM tasks WHERE id=?", taskId)!;
+    if (!existsSync(path.join(taskWorktreeDir(taskId), ".git"))) {
+      const p = this.db.get("SELECT * FROM projects WHERE id=?", cur.project_id);
+      if (!p?.repo) throw new HttpError(400, "the project has no repository");
+      await createWorktree(p.repo, p.default_branch, cur.branch, taskId);
+    }
+    const patch: Row = { lease: "guy", note: "Guy took over the workspace" };
+    if (cur.status === "queued" || cur.status === "working" || cur.status === "failed") patch.status = "waiting_for_guy";
+    this.setTask(taskId, patch);
+  }
+  /** Hand back: commit and push Guy's edits to the task branch, release the lease and re-queue the task with a note. */
+  async handBack(taskId: string): Promise<void> {
+    const t = this.db.get("SELECT * FROM tasks WHERE id=?", taskId);
+    if (!t || t.lease !== "guy") throw new HttpError(400, "this workspace is not taken over");
+    const dir = taskWorktreeDir(taskId);
+    let head = "";
+    if (existsSync(path.join(dir, ".git"))) {
+      await commitAllIfDirty(dir, "Guy's edits (IDE take-over)");
+      const r = await git(["push", "-u", "origin", `HEAD:refs/heads/${t.branch}`], dir);
+      if (r.code !== 0) throw new HttpError(502, `push failed, nothing handed back: ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
+      head = (await git(["rev-parse", "--short", "HEAD"], dir, false)).stdout.trim();
+      if (this.settings().runner === "sbx") rmSync(dir, { recursive: true, force: true }); // the sandbox continues from the pushed branch
+    }
+    const note = `Guy took over the workspace and handed it back${head ? `; his changes are committed on ${t.branch} (HEAD ${head})` : ""}. Check git log before continuing.`;
+    const reopen = t.status === "waiting_for_guy";
+    this.setTask(taskId, { lease: null, ...(reopen ? { status: "queued", summary: `${t.summary ?? ""}\n\n${note}`.trim() } : {}), note: "Handed back by Guy" });
+  }
+
   /* ---------- scheduling ---------- */
   private pickAgent(t: Row): Row | undefined {
     const labels = this.taskLabels(t);
@@ -315,7 +366,7 @@ export class Engine implements FactoryHost {
   /** Queued tasks an agent may pick up: code/review tasks on GitHub projects (manual and script tasks never go to agents). */
   runnableTasks(): Row[] {
     return this.db.all(
-      "SELECT * FROM tasks WHERE status='queued' AND type IN ('code','review') AND project_id IN (SELECT id FROM projects WHERE kind='github') ORDER BY CASE type WHEN 'review' THEN 0 ELSE 1 END, created_at",
+      "SELECT * FROM tasks WHERE status='queued' AND lease IS NULL AND type IN ('code','review') AND project_id IN (SELECT id FROM projects WHERE kind='github') ORDER BY CASE type WHEN 'review' THEN 0 ELSE 1 END, created_at",
     );
   }
 
@@ -533,6 +584,16 @@ export class Engine implements FactoryHost {
     const { task, agent } = act;
     const c = act.control;
     if (c) this.log(act, "system", `run ended: ${c.kind} (${c.reason})`);
+    if (c?.kind === "takeover") {
+      // Soft-stop + checkpoint: commit the WIP and push it, so Guy edits the latest state (sbx: from a local worktree).
+      if (ws.kind === "sbx") await ws.sh("git add -A && (git diff --cached --quiet || git commit -qm 'WIP checkpoint (take-over)')").catch(() => undefined);
+      else await commitAllIfDirty(ws.hostDir, "WIP checkpoint (take-over)").catch(() => false);
+      const r = await ws.push(branch, project.repo).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+      if (r.code !== 0) this.log(act, "error", `checkpoint push failed: ${(r.stderr || r.stdout).slice(0, 200)}`);
+      this.setTask(task!.id, { status: "waiting_for_guy", lease: "guy", note: "Guy took over the workspace" });
+      await ws.destroy(true);
+      return;
+    }
     if (c?.kind === "ask") {
       this.setTask(task!.id, { status: "waiting_for_guy", note: "Waiting for Guy's answer" });
       this.setState(agent.id, "ask");
@@ -715,7 +776,7 @@ export class Engine implements FactoryHost {
     this.db.insert("messages", { id: uid(), channel: "chat", task_id: q.task_id, project_id: q.project_id, from_id: null, to_id: q.agent_id, body: `(answer) ${answer}`, created_at: now() });
     if (q.task_id) {
       const t = this.db.get("SELECT * FROM tasks WHERE id=?", q.task_id);
-      if (t && t.status === "waiting_for_guy") this.setTask(t.id, { status: "queued", note: "Answered, resuming" });
+      if (t && t.status === "waiting_for_guy" && !t.lease) this.setTask(t.id, { status: "queued", note: "Answered, resuming" });
       const p = t && this.db.get("SELECT * FROM projects WHERE id=?", t.project_id);
       if (p && t) await this.setIssueStatus(p, t.issue_number, "working");
     } else if (q.project_id) {

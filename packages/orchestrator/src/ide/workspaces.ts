@@ -10,7 +10,12 @@ import { HttpError } from "./paths.js";
  * Ids: `p-<projectId>` (the project's main mirror or folder), `m-<projectId>` (Guy's own edit clone, "My workspace")
  * and `t-<taskId>` (an agent's task worktree, or its pushed branch). Only `mine` workspaces are writable.
  */
-export interface IdeWorkspace { id: string; label: string; kind: "main" | "folder" | "task" | "mine"; exists?: boolean; project_id: string | null; task_id?: string; root: string; ref?: string; git: boolean; read_only: boolean; note?: string }
+export interface IdeWorkspace { id: string; label: string; kind: "main" | "folder" | "task" | "mine"; exists?: boolean; project_id: string | null; task_id?: string; root: string; ref?: string; git: boolean; read_only: boolean; note?: string; lease?: Lease }
+
+/** Edit lease of a task workspace: an agent owns it while its run is active; Guy owns it after "take over". */
+export interface Lease { owner: "agent" | "guy"; agent?: string }
+/** Returns the name of the agent currently running this task, if any. */
+export type RunningAgent = (taskId: string) => string | undefined;
 
 export const taskWorktreeDir = (taskId: string) => path.join(dataDir(), "work", taskId);
 const isGitDir = (root: string) => existsSync(path.join(root, ".git"));
@@ -56,27 +61,34 @@ function projectWs(p: Row): IdeWorkspace | undefined {
   return undefined;
 }
 
-function taskWs(t: Row, p: Row | undefined): IdeWorkspace | undefined {
+function taskWs(t: Row, p: Row | undefined, running?: RunningAgent): IdeWorkspace | undefined {
   if (!p?.root_path || !t.branch) return undefined;
   const label = `${t.issue_number ? `#${t.issue_number} ` : ""}${t.title}`.slice(0, 80);
   const dir = taskWorktreeDir(t.id);
-  if (existsSync(path.join(dir, ".git"))) return { id: `t-${t.id}`, label, kind: "task", project_id: p.id, task_id: t.id, root: dir, git: true, read_only: true, note: "Agent worktree (live)." };
+  const agent = running?.(t.id);
+  const local = existsSync(path.join(dir, ".git"));
+  if (agent) {
+    const base = { id: `t-${t.id}`, label, kind: "task" as const, project_id: p.id, task_id: t.id, git: true, read_only: true, lease: { owner: "agent" as const, agent }, note: `${agent} is working here. Take over to edit.` };
+    return local ? { ...base, root: dir } : { ...base, root: p.root_path, ref: `origin/${t.branch}` };
+  }
+  if (t.lease === "guy" && local) return { id: `t-${t.id}`, label, kind: "task", project_id: p.id, task_id: t.id, root: dir, git: true, read_only: false, lease: { owner: "guy" }, note: "You took over: edit and commit here, then hand back to the agent." };
+  if (local) return { id: `t-${t.id}`, label, kind: "task", project_id: p.id, task_id: t.id, root: dir, git: true, read_only: true, note: "Agent worktree (live)." };
   // sbx runner or finished task: read the pushed branch from the project's clone.
   return { id: `t-${t.id}`, label, kind: "task", project_id: p.id, task_id: t.id, root: p.root_path, ref: `origin/${t.branch}`, git: true, read_only: true, note: `Pushed branch ${t.branch}.` };
 }
 
-export function listWorkspaces(db: Db): IdeWorkspace[] {
+export function listWorkspaces(db: Db, running?: RunningAgent): IdeWorkspace[] {
   const projects = db.all("SELECT * FROM projects ORDER BY created_at");
   const byId = new Map(projects.map((p) => [p.id, p]));
   const out = projects.flatMap((p) => [projectWs(p), mineWs(p)]).filter((w): w is IdeWorkspace => !!w);
   for (const t of db.all("SELECT * FROM tasks WHERE type='code' AND branch IS NOT NULL AND status<>'done' ORDER BY updated_at DESC LIMIT 50")) {
-    const w = taskWs(t, byId.get(t.project_id));
+    const w = taskWs(t, byId.get(t.project_id), running);
     if (w) out.push(w);
   }
   return out;
 }
 
-export function getWorkspace(db: Db, wid: string): IdeWorkspace {
+export function getWorkspace(db: Db, wid: string, running?: RunningAgent): IdeWorkspace {
   const m = /^([ptm])-([A-Za-z0-9-]{1,64})$/.exec(wid);
   if (!m) throw new HttpError(400, "bad workspace id");
   if (m[1] !== "t") {
@@ -86,7 +98,7 @@ export function getWorkspace(db: Db, wid: string): IdeWorkspace {
     return w;
   }
   const t = db.get("SELECT * FROM tasks WHERE id=?", m[2]);
-  const w = t && taskWs(t, db.get("SELECT * FROM projects WHERE id=?", t.project_id));
+  const w = t && taskWs(t, db.get("SELECT * FROM projects WHERE id=?", t.project_id), running);
   if (!w) throw new HttpError(404, "workspace not found (the task has no branch yet)");
   return w;
 }

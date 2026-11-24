@@ -2,6 +2,7 @@ import http from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { WebSocketServer } from "ws";
+import { activity } from "./activity.js";
 import type { Engine } from "./engine.js";
 import { handleMcp } from "./mcp.js";
 import { healthChecks } from "./health.js";
@@ -49,6 +50,10 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     const act = seg[3];
     if (p === "/api/state") return state();
     if (p === "/api/health") return healthChecks();
+    if (p === "/api/activity" && method === "GET") {
+      const q = url.searchParams;
+      return activity(db, { project: q.get("project"), agent: q.get("agent"), limit: Number(q.get("limit") ?? 20) || 20 });
+    }
     if (p === "/api/auth" && method === "GET") {
       const t = await getToken();
       if (!t) return { connected: false };
@@ -225,9 +230,16 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       ws.on("close", detach);
     });
   });
+  // Activity board: re-derive and push (debounced) whenever runs, agents or tasks may have changed.
+  let actTimer: NodeJS.Timeout | null = null;
   hub.on("event", (e) => {
     const msg = JSON.stringify(e);
     for (const c of wss.clients) if (c.readyState === 1) c.send(msg);
+    if ((e.type === "agents" || e.type === "tasks" || e.type === "log") && !actTimer)
+      actTimer = setTimeout(() => {
+        actTimer = null;
+        hub.emitEvent({ type: "activity", ...activity(db) });
+      }, 500);
   });
 
   // Agent-facing server: MCP + hooks, authenticated by the unguessable per-run id.
@@ -257,7 +269,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
       agent.listen(o.agentPort, o.agentBind, () => {
         const ap = (api.address() as { port: number }).port;
         const gp = (agent.address() as { port: number }).port;
-        resolve({ apiPort: ap, agentPort: gp, close: () => { terms.killAll(); api.close(); agent.close(); wss.close(); termWss.close(); } });
+        resolve({ apiPort: ap, agentPort: gp, close: () => { if (actTimer) clearTimeout(actTimer); terms.killAll(); api.close(); agent.close(); wss.close(); termWss.close(); } });
       });
     });
   });

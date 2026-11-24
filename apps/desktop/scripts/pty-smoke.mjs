@@ -2,7 +2,7 @@
 // can't help), then run the bundled `sf-node` sidecar binary there and spawn a real shell through node-pty.
 // Usage: node scripts/pty-smoke.mjs [target-triple] (needs a built orchestrator and fetch-node.mjs for the host)
 import { execFileSync, execSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,8 @@ const triple = process.argv[2] ?? execSync("rustc -vV").toString().match(/host: 
 const win = process.platform === "win32";
 const sidecar = path.join(here, "../src-tauri/binaries", `sf-node-${triple}${win ? ".exe" : ""}`);
 if (!existsSync(sidecar)) throw new Error(`missing sidecar ${sidecar}; run fetch-node.mjs first`);
-const res = path.join(mkdtempSync(path.join(os.tmpdir(), "sfsmoke-")), "resources");
+// realpath: macOS tmpdir /var/... is a symlink to /private/var/..., which is what require.resolve returns
+const res = path.join(realpathSync(mkdtempSync(path.join(os.tmpdir(), "sfsmoke-"))), "resources");
 execFileSync(process.execPath, [path.join(here, "prepare-resources.mjs"), triple, res], { stdio: "inherit" });
 
 const helper = path.join(res, "node_modules/@lydell", `node-pty-${process.platform}-${process.arch}`, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");

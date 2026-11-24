@@ -88,6 +88,8 @@ describe("api", () => {
     expect((await call("GET", `/api/ws/${wid}/file?path=../x`)).status).toBe(400);
     expect((await call("GET", `/api/ws/${wid}/git/log`)).json).toEqual([]);
     expect((await call("GET", `/api/ws/p-nope/tree`)).status).toBe(404);
+    expect((await call("PUT", `/api/ws/${wid}/file?path=notes.md`, { content: "x", base_sha: null })).status).toBe(403);
+    expect((await call("POST", `/api/ws/${wid}/fs`, { op: "delete", path: "notes.md" })).status).toBe(403);
     expect((await call("GET", `/api/ws/..%2F..%2Fetc/tree`)).status).toBe(400);
     const r = await new Promise<number>((resolve) => {
       const req = http.request({ host: "127.0.0.1", port: srv.apiPort, path: `/api/ws/${wid}/tree`, headers: { host: "evil.example", authorization: "Bearer t" } }, (res) => resolve(res.statusCode ?? 0));

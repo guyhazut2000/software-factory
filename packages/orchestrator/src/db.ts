@@ -94,6 +94,37 @@ CREATE INDEX tasks_ref ON tasks(project_id, source, external_ref);`),
   { version: 5, name: "agent_instructions", up: (db) => db.exec("ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''") },
   // v6: hash of the markdown mirror last written/imported, so start-up re-import only touches changed files.
   { version: 6, name: "md_hash", up: (db) => db.exec("ALTER TABLE tasks ADD COLUMN md_hash TEXT") },
+  // v7: conversation threads (chief | direct | ask); chat messages move into one chief thread per project;
+  // questions generalise into asks (kind, options, thread, status).
+  {
+    version: 7,
+    name: "threads_asks",
+    up: (db) => {
+      db.exec(`
+CREATE TABLE threads (
+  id TEXT PRIMARY KEY, agent_id TEXT, project_id TEXT, task_id TEXT, title TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK (kind IN ('chief','direct','ask')), status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL);
+CREATE INDEX threads_project ON threads(project_id, kind);
+ALTER TABLE messages ADD COLUMN thread_id TEXT;
+CREATE INDEX messages_thread ON messages(thread_id, created_at);
+ALTER TABLE questions ADD COLUMN kind TEXT NOT NULL DEFAULT 'question' CHECK (kind IN ('question','approval','action','credential'));
+ALTER TABLE questions ADD COLUMN options TEXT;
+ALTER TABLE questions ADD COLUMN thread_id TEXT;
+ALTER TABLE questions ADD COLUMN status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','answered','dismissed'));
+UPDATE questions SET status='answered' WHERE answer IS NOT NULL;`);
+      const chief = db.get("SELECT id FROM agents WHERE role='chief' ORDER BY created_at LIMIT 1")?.id ?? null;
+      const pids = new Set<string | null>([
+        ...db.all("SELECT DISTINCT project_id FROM messages WHERE channel='chat'").map((r) => r.project_id ?? null),
+        ...db.all("SELECT DISTINCT project_id FROM questions").map((r) => r.project_id ?? null),
+      ]);
+      for (const pid of pids) {
+        const id = crypto.randomUUID();
+        db.insert("threads", { id, agent_id: chief, project_id: pid, title: "Chief", kind: "chief", created_at: Date.now() });
+        db.run("UPDATE messages SET thread_id=? WHERE channel='chat' AND COALESCE(project_id,'')=COALESCE(?,'')", id, pid);
+        db.run("UPDATE questions SET thread_id=? WHERE COALESCE(project_id,'')=COALESCE(?,'')", id, pid);
+      }
+    },
+  },
 ];
 
 export class Db {

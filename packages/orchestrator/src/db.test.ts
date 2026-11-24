@@ -105,4 +105,22 @@ describe("v3 unified tasks", () => {
     expect(() => db.insert("tasks", { id: "g1", source: "github", title: "no ref", project_id: "p", created_at: 1, updated_at: 1 })).toThrow();
     expect(() => db.insert("tasks", { id: "x1", source: "local", type: "bogus", title: "x", created_at: 1, updated_at: 1 })).toThrow();
   });
+  it("v7 moves chat messages into one chief thread per project and generalises questions", () => {
+    const f = tmp();
+    const old = new Db(f, MIGRATIONS.filter((m) => m.version < 7));
+    old.insert("agents", { id: "c1", name: "Chief", role: "chief", provider: "claude", model: "m", created_at: 1 });
+    for (const [id, pid] of [["m1", "p1"], ["m2", "p1"], ["m3", null]]) old.insert("messages", { id, channel: "chat", project_id: pid, body: id, created_at: 1 });
+    old.insert("messages", { id: "b1", channel: "bus", body: "bus", created_at: 1 });
+    old.insert("questions", { id: "q1", project_id: "p1", body: "?", answer: "a", asked_at: 1 });
+    old.close();
+    const db = new Db(f);
+    const threads = db.all("SELECT * FROM threads ORDER BY project_id");
+    expect(threads).toHaveLength(2);
+    expect(threads.every((t) => t.kind === "chief" && t.agent_id === "c1")).toBe(true);
+    const p1 = threads.find((t) => t.project_id === "p1")!;
+    expect(db.all("SELECT id FROM messages WHERE thread_id=?", p1.id).map((r) => r.id).sort()).toEqual(["m1", "m2"]);
+    expect(db.get("SELECT thread_id FROM messages WHERE id='b1'")!.thread_id).toBeNull();
+    expect(db.get("SELECT * FROM questions WHERE id='q1'")).toMatchObject({ kind: "question", status: "answered", thread_id: p1.id, options: null });
+    expect(() => db.insert("questions", { id: "q2", body: "x", asked_at: 1, kind: "bogus" })).toThrow();
+  });
 });

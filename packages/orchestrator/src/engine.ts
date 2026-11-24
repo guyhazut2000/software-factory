@@ -268,6 +268,47 @@ export class Engine implements FactoryHost, IdeHost {
     return row;
   }
 
+  /** Local task (no GitHub Issue): `manual` is a to-do for Guy; local `code` tasks are held (not scheduled) until M8. */
+  createLocalTask(b: { project_id?: string | null; type?: string; title?: string; body?: string; priority?: number | null; due_at?: number | null }): Row {
+    const title = String(b.title ?? "").trim();
+    if (!title) throw new Error("title required");
+    const type = b.type ?? "manual";
+    if (type !== "manual" && type !== "code") throw new Error("local tasks are manual or code");
+    const project_id = b.project_id || null;
+    if (project_id && !this.db.get("SELECT id FROM projects WHERE id=?", project_id)) throw new Error("project not found");
+    const row: Row = { id: uid(), project_id, source: "local", type, title, body: String(b.body ?? ""), status: "queued", priority: b.priority ?? null, due_at: b.due_at ?? null, labels: "[]", created_at: now(), updated_at: now() };
+    this.db.insert("tasks", row);
+    this.mirror?.write(row.id, "create");
+    this.hub.emitEvent({ type: "tasks" });
+    return this.db.get("SELECT * FROM tasks WHERE id=?", row.id)!;
+  }
+  /** Edit a local task's text/planning fields (GitHub tasks are edited on GitHub). */
+  updateLocalTask(id: string, b: Row): Row {
+    const t = this.db.get("SELECT * FROM tasks WHERE id=?", id);
+    if (!t) throw new Error("task not found");
+    if (t.source !== "local") throw new Error("only local tasks can be edited here");
+    const patch: Row = {};
+    if (b.title !== undefined) {
+      if (!String(b.title).trim()) throw new Error("title required");
+      patch.title = String(b.title).trim();
+    }
+    if (b.body !== undefined) patch.body = String(b.body);
+    for (const k of ["priority", "due_at"]) if (b[k] !== undefined) patch[k] = b[k] === null || b[k] === "" ? null : Number(b[k]);
+    if (b.project_id !== undefined) {
+      if (b.project_id && !this.db.get("SELECT id FROM projects WHERE id=?", b.project_id)) throw new Error("project not found");
+      patch.project_id = b.project_id || null;
+    }
+    if (Object.keys(patch).length) this.setTask(id, patch);
+    return this.db.get("SELECT * FROM tasks WHERE id=?", id)!;
+  }
+  /** Guy marks a manual task done (queued -> done), or reopens it (done -> queued). */
+  completeTask(id: string, done = true): void {
+    const t = this.db.get("SELECT * FROM tasks WHERE id=?", id);
+    if (!t) throw new Error("task not found");
+    if (t.type !== "manual") throw new Error("only manual tasks are completed by hand");
+    this.setTask(id, { status: done ? "done" : "queued", note: done ? "Done by Guy" : "Reopened" });
+  }
+
   async syncIssues(): Promise<void> {
     if (!(await getToken())) return;
     for (const p of this.db.all("SELECT * FROM projects WHERE kind='github'")) {
@@ -386,10 +427,10 @@ export class Engine implements FactoryHost, IdeHost {
     return !!a.token_budget && a.tokens_today >= a.token_budget;
   }
 
-  /** Queued tasks an agent may pick up: code/review tasks on GitHub projects (manual and script tasks never go to agents). */
+  /** Queued tasks an agent may pick up: GitHub-backed code/review tasks (manual/script never go to agents; local code waits for M8). */
   runnableTasks(): Row[] {
     return this.db.all(
-      "SELECT * FROM tasks WHERE status='queued' AND lease IS NULL AND type IN ('code','review') AND project_id IN (SELECT id FROM projects WHERE kind='github') ORDER BY CASE type WHEN 'review' THEN 0 ELSE 1 END, created_at",
+      "SELECT * FROM tasks WHERE status='queued' AND lease IS NULL AND source='github' AND type IN ('code','review') AND project_id IN (SELECT id FROM projects WHERE kind='github') ORDER BY CASE type WHEN 'review' THEN 0 ELSE 1 END, created_at",
     );
   }
 

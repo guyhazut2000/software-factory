@@ -71,7 +71,11 @@ describe("api", () => {
     expect((await call("POST", "/api/projects", { kind: "folder", root_path: path.join(dir, "missing") })).status).toBe(400);
     const n = await call("POST", "/api/projects", { kind: "none", name: "Personal" });
     expect(n.json).toMatchObject({ kind: "none", repo: null, root_path: null, name: "Personal" });
-    expect((await call("POST", "/api/tasks", { project_id: n.json.id, title: "x" })).status).toBe(400);
+    const lt = await call("POST", "/api/tasks", { project_id: n.json.id, title: "x" });
+    expect(lt.json).toMatchObject({ source: "local", type: "manual", status: "queued", project_id: n.json.id });
+    expect((await call("PUT", `/api/tasks/${lt.json.id}`, { title: "y" })).json).toMatchObject({ title: "y" });
+    expect((await call("POST", `/api/tasks/${lt.json.id}/complete`, {})).status).toBe(200);
+    expect((await call("POST", "/api/tasks", { title: "" })).status).toBe(400);
     const st = (await call("GET", "/api/state")).json;
     expect(st.projects.map((p: { kind: string }) => p.kind)).toEqual(expect.arrayContaining(["folder", "none"]));
     const dir2 = mkdtempSync(path.join(tmpdir(), "sf-proj2-"));

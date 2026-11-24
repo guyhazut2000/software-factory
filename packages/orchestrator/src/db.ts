@@ -92,6 +92,8 @@ CREATE INDEX tasks_ref ON tasks(project_id, source, external_ref);`),
   { version: 4, name: "edit_leases", up: (db) => db.exec("ALTER TABLE tasks ADD COLUMN lease TEXT") },
   // v5: per-agent role/instructions text (appended to the generated system prompt).
   { version: 5, name: "agent_instructions", up: (db) => db.exec("ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''") },
+  // v6: hash of the markdown mirror last written/imported, so start-up re-import only touches changed files.
+  { version: 6, name: "md_hash", up: (db) => db.exec("ALTER TABLE tasks ADD COLUMN md_hash TEXT") },
 ];
 
 export class Db {

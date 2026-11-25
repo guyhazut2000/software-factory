@@ -79,7 +79,7 @@ export class ScriptRunner {
     }
     if (def.runner === "sbx" && !deps.run && !deps.stream && !which("sbx")) throw new Error("sbx not found on PATH");
     const project = def.project_id ? this.db.get("SELECT * FROM projects WHERE id=?", def.project_id) : undefined;
-    const root = typeof project?.root_path === "string" && project.root_path ? project.root_path : null;
+    const root = typeof project?.root_path === "string" && project.root_path ? resolveCwd(project.root_path, null) : null;
     const cwd = resolveCwd(root, def.cwd);
     const env = resolveEnv(def.env_refs);
     const id = uid();

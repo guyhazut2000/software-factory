@@ -124,3 +124,19 @@ describe("v3 unified tasks", () => {
     expect(() => db.insert("questions", { id: "q2", body: "x", asked_at: 1, kind: "bogus" })).toThrow();
   });
 });
+
+describe("v10 automations", () => {
+  it("adds the automations table and allows script runs without an agent", () => {
+    const f = tmp();
+    const old = new DatabaseSync(f);
+    old.exec(V010);
+    old.close();
+    const db = new Db(f);
+    expect(db.version()).toBe(MIGRATIONS.at(-1)!.version);
+    db.insert("automations", { id: "a1", name: "backup", kind: "command", command: "echo", runner: "sbx", created_at: 1, updated_at: 1 });
+    db.insert("runs", { id: "r1", automation_id: "a1", kind: "script", runner: "sbx", started_at: 1 });
+    expect(db.get("SELECT agent_id, automation_id, kind FROM runs WHERE id='r1'")).toMatchObject({ agent_id: null, automation_id: "a1", kind: "script" });
+    expect(() => db.insert("automations", { id: "a2", name: "backup", kind: "command", created_at: 1, updated_at: 1 })).toThrow();
+    db.close();
+  });
+});

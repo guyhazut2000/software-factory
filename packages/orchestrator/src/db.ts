@@ -129,6 +129,30 @@ UPDATE questions SET status='answered' WHERE answer IS NOT NULL;`);
   { version: 8, name: "pending_notes", up: (db) => db.exec("ALTER TABLE messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0") },
   // v9: structured ask payload (JSON), e.g. {"type":"network","host":..,"sandbox":..} for network-access requests.
   { version: 9, name: "ask_meta", up: (db) => db.exec("ALTER TABLE questions ADD COLUMN meta TEXT") },
+  // v10: automations (YAML-mirrored definitions) and script runs (nullable agent_id, automation_id).
+  {
+    version: 10,
+    name: "automations",
+    up: (db) =>
+      db.exec(`
+CREATE TABLE automations (
+  id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK (kind IN ('command','agent')), command TEXT NOT NULL DEFAULT '',
+  args TEXT NOT NULL DEFAULT '[]', cwd TEXT, runner TEXT NOT NULL DEFAULT 'sbx' CHECK (runner IN ('sbx','host')),
+  env_refs TEXT NOT NULL DEFAULT '[]', timeout_sec INTEGER NOT NULL DEFAULT 300,
+  trigger TEXT NOT NULL DEFAULT 'manual' CHECK (trigger IN ('manual','schedule','file_change','git_push')),
+  schedule TEXT, outputs_dir TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+  yaml_path TEXT, yaml_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX automations_name ON automations(name);
+CREATE TABLE runs_v10 (
+  id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT, automation_id TEXT, kind TEXT NOT NULL, runner TEXT,
+  started_at INTEGER NOT NULL, ended_at INTEGER, exit_reason TEXT, last_heartbeat_at INTEGER, tokens INTEGER NOT NULL DEFAULT 0);
+INSERT INTO runs_v10 (id,task_id,agent_id,automation_id,kind,runner,started_at,ended_at,exit_reason,last_heartbeat_at,tokens)
+  SELECT id,task_id,agent_id,NULL,kind,runner,started_at,ended_at,exit_reason,last_heartbeat_at,tokens FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_v10 RENAME TO runs;
+CREATE INDEX runs_automation ON runs(automation_id, started_at);`),
+  },
 ];
 
 export class Db {

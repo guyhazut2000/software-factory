@@ -14,6 +14,8 @@ import { ideRoute } from "./ide/routes.js";
 import { TermRegistry } from "./term/pty.js";
 import { termRoute } from "./term/routes.js";
 import { now, uid } from "./util.js";
+import { createAutomation, deleteAutomation, publicAutomation, updateAutomation } from "./automirror.js";
+import { runEvents } from "./scriptrunner.js";
 
 type J = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -41,6 +43,7 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     settings: engine.settings(),
     running: [...engine.active.values()].map((a) => ({ run_id: a.runId, agent_id: a.agent.id, task_id: a.task?.id ?? null, started_at: a.startedAt, tokens: a.tokens })),
     templates: TEMPLATES,
+    automations: db.all("SELECT * FROM automations ORDER BY name").map(publicAutomation),
   });
 
   async function route(method: string, url: URL, b: J): Promise<unknown> {
@@ -186,6 +189,43 @@ export function startServers(engine: Engine, o: { apiPort: number; agentPort: nu
     }
     if (seg[1] === "questions" && id && act === "dismiss" && method === "POST") return engine.dismissQuestion(id), { ok: true };
     if (seg[1] === "questions" && id && act === "answer") return await engine.answerQuestion(id, String(b.answer)), { ok: true };
+    if (p === "/api/automations" && method === "GET") {
+      const pid = url.searchParams.get("project_id");
+      const rows = pid === null
+        ? db.all("SELECT * FROM automations ORDER BY name")
+        : db.all("SELECT * FROM automations WHERE COALESCE(project_id,'')=COALESCE(?,'') ORDER BY name", pid || null);
+      return rows.map(publicAutomation);
+    }
+    if (p === "/api/automations" && method === "POST") {
+      const row = createAutomation(db, engine.automirror, b);
+      hub.emitEvent({ type: "automations" });
+      return row;
+    }
+    if (seg[1] === "automations" && id) {
+      if (!act && method === "GET") {
+        const row = db.get("SELECT * FROM automations WHERE id=?", id);
+        if (!row) throw Object.assign(new Error("automation not found"), { status: 404 });
+        return publicAutomation(row);
+      }
+      if (!act && method === "PUT") {
+        const row = updateAutomation(db, engine.automirror, id, b);
+        hub.emitEvent({ type: "automations" });
+        return row;
+      }
+      if (!act && method === "DELETE") {
+        deleteAutomation(db, engine.automirror, id);
+        hub.emitEvent({ type: "automations" });
+        return { ok: true };
+      }
+      if (act === "run" && method === "POST") {
+        const row = engine.scripts.start(id);
+        return row;
+      }
+      if (act === "runs" && method === "GET") {
+        return db.all("SELECT * FROM runs WHERE automation_id=? ORDER BY started_at DESC LIMIT 50", id);
+      }
+    }
+    if (seg[1] === "runs" && id && method === "GET") return runEvents(db, id);
     if (p === "/api/costs") {
       const per_agent = db.all("SELECT a.name, a.id, COALESCE(SUM(c.input_tokens),0) AS input_tokens, COALESCE(SUM(c.output_tokens),0) AS output_tokens, COALESCE(SUM(c.usd),0) AS usd FROM agents a LEFT JOIN costs c ON c.agent_id=a.id GROUP BY a.id");
       const per_day = db.all("SELECT date(created_at/1000,'unixepoch','localtime') AS day, SUM(input_tokens+output_tokens) AS tokens, SUM(usd) AS usd FROM costs GROUP BY day ORDER BY day DESC LIMIT 14");

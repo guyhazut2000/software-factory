@@ -1,4 +1,6 @@
+import type { AutomationMirror } from "./automirror.js";
 import type { TaskMirror } from "./taskmirror.js";
+import { ScriptRunner } from "./scriptrunner.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAdapter, type AgentEvent } from "@sf/adapters";
@@ -78,11 +80,14 @@ export class Engine implements FactoryHost, IdeHost {
   private lastSync = 0;
   private lastPr = 0;
   agentPort = 0;
-  /** Markdown mirror of local tasks in the workspace repo (set in main; optional in tests). */
+  /** Markdown/YAML mirror of local tasks and automations in the workspace repo (set in main; optional in tests). */
   mirror: TaskMirror | null = null;
+  automirror: AutomationMirror | null = null;
+  scripts: ScriptRunner;
 
   constructor(public db: Db, public hub: Hub) {
     this.supervisor.cfg = { ...defaultSupervisorConfig };
+    this.scripts = new ScriptRunner(this.db, this.hub, () => this.settings());
   }
 
   /* ---------- settings ---------- */

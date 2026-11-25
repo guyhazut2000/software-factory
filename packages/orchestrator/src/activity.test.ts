@@ -14,6 +14,8 @@ db.insert("tasks", { id: "task12345678", project_id: "p1", source: "local", type
 db.insert("tasks", { id: "task2", project_id: "p2", source: "local", type: "script", title: "T2", status: "done", created_at: 1, updated_at: 1 });
 db.insert("runs", { id: "r1", task_id: "task12345678", agent_id: "a1", kind: "dev", runner: "sbx", started_at: 10, last_heartbeat_at: 20, tokens: 5 });
 db.insert("runs", { id: "r2", task_id: "task2", agent_id: "a1", kind: "script", runner: "worktree", started_at: 1, ended_at: 5, exit_reason: "ok" });
+db.insert("automations", { id: "auto1", project_id: "p1", name: "nightly", kind: "command", command: "echo", runner: "sbx", created_at: 1, updated_at: 1 });
+db.insert("runs", { id: "run12345678", task_id: null, agent_id: null, automation_id: "auto1", kind: "script", runner: "sbx", started_at: 2, ended_at: 4, exit_reason: "ok" });
 db.insert("events", { run_id: "r1", ts: 11, kind: "system", text: "first" });
 db.insert("events", { run_id: "r1", ts: 12, kind: "agent", text: "latest" });
 
@@ -23,8 +25,9 @@ describe("activity", () => {
     expect(a.live).toHaveLength(1);
     expect(a.live[0]).toMatchObject({ agent: "dev", state: "working", project: "Proj", task: "T1", task_type: "code", branch: "sf/t1", pr: 7, runner: "sbx", sandbox_name: "sf-task1234", last_heartbeat_at: 20, tokens: 5 });
     expect(a.live[0].last_event).toMatchObject({ text: "latest" });
-    expect(a.history).toHaveLength(1);
+    expect(a.history).toHaveLength(2);
     expect(a.history[0]).toMatchObject({ run_id: "r2", task_type: "script", sandbox_name: null, exit_reason: "ok" });
+    expect(a.history[1]).toMatchObject({ run_id: "run12345678", automation: "nightly", project: "Proj", sandbox_name: "sf-r-run12345", exit_reason: "ok" });
   });
   it("filters by project and agent", () => {
     expect(activity(db, { project: "p2" }).live).toHaveLength(0);
@@ -42,7 +45,8 @@ describe("activity", () => {
     expect(r.status).toBe(200);
     const j = await r.json();
     expect(j.live[0].run_id).toBe("r1");
-    expect(j.history).toHaveLength(0);
+    expect(j.history).toHaveLength(1);
+    expect(j.history[0].automation).toBe("nightly");
     const ws = new WebSocket(`ws://127.0.0.1:${srv.apiPort}/ws?token=t`);
     await new Promise((res, rej) => (ws.on("open", res), ws.on("error", rej)));
     const got = new Promise<{ type: string; live: unknown[] }>((res) => ws.on("message", (d) => { const m = JSON.parse(String(d)); if (m.type === "activity") res(m); }));

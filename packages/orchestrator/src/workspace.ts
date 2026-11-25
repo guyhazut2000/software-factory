@@ -152,6 +152,17 @@ export function sbxCreateArgs(o: { name: string; sbxAgent: string; dir: string; 
   return ["create", "--clone", "--name", o.name, ...res, o.sbxAgent, o.dir];
 }
 
+/** Direct-mount (not `--clone`) for script runs. `dir` omitted = mountless. Extra workspaces may use `:ro`. See docs.docker.com/ai/sandboxes/usage */
+export function sbxCreateMountArgs(o: { name: string; template?: string; dir?: string | null; extras?: string[] }): string[] {
+  const args = ["create", "--name", o.name, o.template ?? "claude"];
+  if (o.dir) args.push(o.dir);
+  for (const e of o.extras ?? []) args.push(e);
+  return args;
+}
+
+/** Sandbox name for a script run (`sf-r-<run8>`). */
+export const sandboxNameForRun = (runId: string) => `sf-r-${runId.slice(0, 8)}`;
+
 export async function removeSbx(name: string): Promise<void> {
   await run("sbx", ["stop", name]);
   await run("sbx", ["rm", "--force", name]);

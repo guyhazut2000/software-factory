@@ -7,6 +7,7 @@ import { Engine } from "./engine.js";
 import { startServers } from "./server.js";
 import { dataDir } from "./util.js";
 import { backfillRoots } from "./projects.js";
+import { AutomationMirror } from "./automirror.js";
 import { TaskMirror } from "./taskmirror.js";
 
 const db = new Db(process.env.SF_DB ?? path.join(dataDir(), "factory.db"));
@@ -15,8 +16,11 @@ const hub = new Hub();
 const engine = new Engine(db, hub);
 try {
   engine.mirror = new TaskMirror(db);
+  engine.automirror = new AutomationMirror(db, engine.mirror);
   const { imported } = engine.mirror.importAll();
+  const { imported: autoImported } = engine.automirror.importAll();
   if (imported) console.log(`workspace: re-imported ${imported} task file(s)`);
+  if (autoImported) console.log(`workspace: re-imported ${autoImported} automation file(s)`);
 } catch (e) {
   console.error(`workspace repo unavailable: ${(e as Error).message}`);
   engine.mirror = null;

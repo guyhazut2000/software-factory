@@ -122,6 +122,10 @@ export class TaskMirror {
     this.queue(`task ${taskId}: delete`);
   }
 
+  queueCommit(msg: string): void {
+    this.queue(msg);
+  }
+
   private queue(msg: string): void {
     this.pending.push(msg);
     if (this.timer) clearTimeout(this.timer);

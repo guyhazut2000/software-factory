@@ -59,12 +59,44 @@ function hostArgv(def: AutomationDef): string[] {
   return ["sh", "-c", def.command];
 }
 
+export type ScriptSettings = {
+  allow_worktree: boolean;
+  mode?: "quiet" | "eco" | "full";
+  script_cap?: number;
+  stopped?: boolean;
+};
+
+/** Effective concurrent script slots: quiet=0, eco=1, full=script_cap (default 2). Independent of the agent cap. */
+export function effectiveScriptCap(s: { mode?: string; script_cap?: number }): number {
+  if (s.mode === "quiet") return 0;
+  if (s.mode === "eco") return 1;
+  return Math.max(1, s.script_cap ?? 2);
+}
+
+type Live = { cancelled: boolean; kill: () => void };
+
 export class ScriptRunner {
+  private live = new Map<string, Live>();
+
   constructor(
     private db: Db,
     private hub: Hub,
-    private settings: () => { allow_worktree: boolean },
+    private settings: () => ScriptSettings,
   ) {}
+
+  get running(): number {
+    return this.live.size;
+  }
+
+  /** Stop every in-flight script run (stop-all). Already-finished rows are left alone. */
+  stopAll(): void {
+    for (const [id, live] of [...this.live]) {
+      this.finish(id, 143, "stop-all");
+      live.cancelled = true;
+      live.kill();
+      this.live.delete(id);
+    }
+  }
 
   /** Validate and start a manual run. Returns the run row immediately; logs stream over the hub. */
   start(automationId: string, deps: Partial<ExecDeps> = {}): Row {
@@ -74,7 +106,14 @@ export class ScriptRunner {
     if (!def.enabled) throw new Error("Automation is disabled");
     if (def.kind !== "command") throw new Error("Agent automations cannot be run yet");
     if (!def.command.trim()) throw new Error("command required");
-    if (def.runner === "host" && !this.settings().allow_worktree) {
+    const s = this.settings();
+    if (s.stopped) throw Object.assign(new Error("The factory is stopped (stop-all). Resume it first."), { status: 409 });
+    const cap = effectiveScriptCap(s);
+    if (this.live.size >= cap) {
+      const msg = cap === 0 ? "Mode is quiet; scripts are paused" : `Script cap reached (${cap} running)`;
+      throw Object.assign(new Error(msg), { status: 409 });
+    }
+    if (def.runner === "host" && !s.allow_worktree) {
       throw new Error("Host runner is disabled. Enable the unsafe worktree fallback in Settings, or use the sbx runner.");
     }
     if (def.runner === "sbx" && !deps.run && !deps.stream && !which("sbx")) throw new Error("sbx not found on PATH");
@@ -85,17 +124,29 @@ export class ScriptRunner {
     const id = uid();
     const started = now();
     this.db.insert("runs", { id, task_id: null, agent_id: null, automation_id: def.id, kind: "script", runner: def.runner, started_at: started, last_heartbeat_at: started, tokens: 0 });
+    const live: Live = { cancelled: false, kill: () => { live.cancelled = true; } };
+    this.live.set(id, live);
     this.log(id, "system", `start ${def.name} (${def.runner})`);
-    void this.execute(id, def, cwd, env, root, { ...defaultDeps, ...deps }).catch((e) => this.finish(id, 1, "error", String(e)));
+    void this.execute(id, def, cwd, env, root, live, { ...defaultDeps, ...deps })
+      .catch((e) => this.finish(id, 1, "error", String(e)))
+      .finally(() => this.live.delete(id));
     return this.db.get("SELECT * FROM runs WHERE id=?", id)!;
   }
 
-  private async execute(runId: string, def: AutomationDef, cwd: string, env: Record<string, string>, root: string | null, deps: ExecDeps): Promise<void> {
+  private async execute(runId: string, def: AutomationDef, cwd: string, env: Record<string, string>, root: string | null, live: Live, deps: ExecDeps): Promise<void> {
     let timedOut = false;
     const timeoutMs = def.timeout_sec * 1000;
     const onLine = (line: string, isErr: boolean) => this.log(runId, isErr ? "stderr" : "stdout", line);
     let streaming: Streaming | undefined;
     let sandbox: string | null = null;
+    live.kill = () => {
+      live.cancelled = true;
+      streaming?.kill();
+    };
+    if (live.cancelled) {
+      this.finish(runId, 143, "stop-all");
+      return;
+    }
     try {
       if (def.runner === "sbx") {
         sandbox = sandboxNameForRun(runId);
@@ -110,6 +161,11 @@ export class ScriptRunner {
         streaming = deps.stream(hostArgv(def), { cwd, env, onLine });
       }
       if (!streaming) throw new Error("failed to start command");
+      if (live.cancelled) {
+        streaming.kill();
+        this.finish(runId, 143, "stop-all");
+        return;
+      }
       const proc = streaming;
       const code = await new Promise<number>((resolve) => {
         const t = setTimeout(() => {

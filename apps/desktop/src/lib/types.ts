@@ -17,7 +17,7 @@ export interface Question { id: string; task_id: string | null; agent_id: string
 export type AskKind = "question" | "approval" | "action" | "credential";
 export interface Thread { id: string; agent_id: string | null; project_id: string | null; task_id: string | null; title: string; kind: "chief" | "direct" | "ask"; status: string; created_at: number }
 export interface Settings {
-  mode: "quiet" | "eco" | "full"; cap: number; runner: "sbx" | "worktree"; allow_worktree: boolean; stopped: boolean;
+  mode: "quiet" | "eco" | "full"; cap: number; script_cap: number; runner: "sbx" | "worktree"; allow_worktree: boolean; stopped: boolean;
   agent_host: string; stuck_minutes: number; max_restarts: number; max_review_rounds: number;
 }
 export interface Template { key: string; name: string; role: string; description: string; provider: string; model: string; effort: string; permissions: string[]; skills: string[]; token_budget: number | null; max_runtime_sec: number }

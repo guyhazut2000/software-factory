@@ -8,7 +8,7 @@ import { Engine } from "./engine.js";
 import { startServers } from "./server.js";
 import { TaskMirror } from "./taskmirror.js";
 import { AutomationMirror, createAutomation } from "./automirror.js";
-import { ScriptRunner, resolveCwd } from "./scriptrunner.js";
+import { ScriptRunner, resolveCwd, effectiveScriptCap } from "./scriptrunner.js";
 import { sandboxNameForRun, sbxCreateMountArgs } from "./workspace.js";
 import type { ExecDeps } from "./scriptrunner.js";
 
@@ -142,5 +142,71 @@ describe("automations api", () => {
     expect(got.events.some((e: { text: string }) => e.text === "api")).toBe(true);
     expect((await call("GET", `/api/automations/${created.json.id}/runs`)).json).toHaveLength(1);
     expect((await call("GET", "/api/state")).json.automations.some((a: { name: string }) => a.name === "api-hello")).toBe(true);
+  });
+});
+
+describe("script cap and modes", () => {
+  const hang = { command: "node", args: ["-e", "setTimeout(()=>{}, 30000)"], runner: "host" as const, timeout_sec: 30 };
+
+  it("computes an effective cap independent of the agent cap", () => {
+    expect(effectiveScriptCap({})).toBe(2);
+    expect(effectiveScriptCap({ script_cap: 4, mode: "full" })).toBe(4);
+    expect(effectiveScriptCap({ script_cap: 4, mode: "eco" })).toBe(1);
+    expect(effectiveScriptCap({ script_cap: 4, mode: "quiet" })).toBe(0);
+  });
+
+  it("refuses a third concurrent script, then frees the slot", async () => {
+    const db = new Db(":memory:");
+    const dir = tmp();
+    db.insert("projects", { id: "p1", name: "Data", kind: "folder", root_path: dir, created_at: 1 });
+    const runner = new ScriptRunner(db, new Hub(), () => ({ allow_worktree: true, mode: "full", script_cap: 2, stopped: false }));
+    const a = createAutomation(db, null, { name: "h1", project_id: "p1", ...hang });
+    const b = createAutomation(db, null, { name: "h2", project_id: "p1", ...hang });
+    const c = createAutomation(db, null, { name: "h3", project_id: "p1", ...hang });
+    const r1 = runner.start(a.id);
+    const r2 = runner.start(b.id);
+    expect(runner.running).toBe(2);
+    expect(() => runner.start(c.id)).toThrow(/Script cap reached \(2 running\)/);
+    runner.stopAll();
+    expect((await wait(db, r1.id)).exit_reason).toBe("stop-all");
+    expect((await wait(db, r2.id)).exit_reason).toBe("stop-all");
+    expect(runner.running).toBe(0);
+    const r3 = runner.start(c.id);
+    expect(r3.ended_at).toBeNull();
+    runner.stopAll();
+    expect((await wait(db, r3.id)).exit_reason).toBe("stop-all");
+  });
+
+  it("quiet blocks starts, eco allows one, and stop-all then resume", async () => {
+    const db = new Db(":memory:");
+    db.setSetting("allow_worktree", true);
+    const dir = tmp();
+    db.insert("projects", { id: "p1", name: "Data", kind: "folder", root_path: dir, created_at: 1 });
+    const engine = new Engine(db, new Hub());
+    expect(engine.settings().cap).toBe(3);
+    expect(engine.settings().script_cap).toBe(2);
+    const a = createAutomation(db, null, { name: "q1", project_id: "p1", ...hang });
+    const b = createAutomation(db, null, { name: "q2", project_id: "p1", ...hang });
+    engine.patchSettings({ mode: "quiet" });
+    expect(engine.scheduler.cap).toBe(0);
+    expect(engine.settings().cap).toBe(3);
+    expect(() => engine.scripts.start(a.id)).toThrow(/Mode is quiet/);
+    engine.patchSettings({ mode: "eco" });
+    expect(engine.scheduler.cap).toBe(1);
+    const r1 = engine.scripts.start(a.id);
+    expect(() => engine.scripts.start(b.id)).toThrow(/Script cap reached \(1 running\)/);
+    engine.stopAll();
+    expect((await wait(db, r1.id)).exit_reason).toBe("stop-all");
+    expect(() => engine.scripts.start(a.id)).toThrow(/stopped \(stop-all\)/);
+    engine.resumeAll();
+    engine.patchSettings({ mode: "full" });
+    const r2 = engine.scripts.start(a.id);
+    const r3 = engine.scripts.start(b.id);
+    expect(engine.scripts.running).toBe(2);
+    expect(engine.scheduler.cap).toBe(3);
+    engine.stopAll();
+    expect((await wait(db, r2.id)).exit_reason).toBe("stop-all");
+    expect((await wait(db, r3.id)).exit_reason).toBe("stop-all");
+    engine.resumeAll();
   });
 });

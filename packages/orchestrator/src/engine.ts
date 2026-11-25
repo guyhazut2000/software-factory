@@ -96,6 +96,7 @@ export class Engine implements FactoryHost, IdeHost {
     return {
       mode: d.getSetting<"quiet" | "eco" | "full">("mode", "full"),
       cap: d.getSetting("cap", 3),
+      script_cap: d.getSetting("script_cap", 2),
       runner: d.getSetting<"sbx" | "worktree">("runner", "sbx"),
       allow_worktree: d.getSetting("allow_worktree", false),
       stopped: d.getSetting("stopped", false),
@@ -112,7 +113,7 @@ export class Engine implements FactoryHost, IdeHost {
     this.supervisor.cfg.maxRestarts = s.max_restarts;
   }
   patchSettings(patch: Record<string, unknown>): void {
-    for (const k of ["mode", "cap", "runner", "allow_worktree", "agent_host", "stuck_minutes", "max_restarts", "max_review_rounds"]) if (k in patch) this.db.setSetting(k, patch[k]);
+    for (const k of ["mode", "cap", "script_cap", "runner", "allow_worktree", "agent_host", "stuck_minutes", "max_restarts", "max_review_rounds"]) if (k in patch) this.db.setSetting(k, patch[k]);
     this.applySettings();
     this.hub.emitEvent({ type: "settings" });
   }
@@ -222,6 +223,7 @@ export class Engine implements FactoryHost, IdeHost {
       a.control = { kind: "stop", reason: "stop-all" };
       a.kill?.();
     }
+    this.scripts.stopAll();
     this.hub.emitEvent({ type: "settings" });
   }
   resumeAll(): void {

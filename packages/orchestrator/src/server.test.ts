@@ -43,13 +43,18 @@ describe("api", () => {
     expect(st.agents).toHaveLength(1);
   });
   it("settings: modes and cap apply to the scheduler", async () => {
+    expect(engine.settings().script_cap).toBe(2);
+    expect(engine.settings().cap).toBe(3);
     await call("PUT", "/api/settings", { mode: "eco" });
     expect(engine.scheduler.cap).toBe(1);
-    await call("PUT", "/api/settings", { mode: "full", cap: 5 });
+    await call("PUT", "/api/settings", { mode: "full", cap: 5, script_cap: 4 });
     expect(engine.scheduler.cap).toBe(5);
+    expect(engine.settings().cap).toBe(5);
+    expect(engine.settings().script_cap).toBe(4);
     await call("PUT", "/api/settings", { mode: "quiet" });
     expect(engine.scheduler.cap).toBe(0);
-    await call("PUT", "/api/settings", { mode: "full", cap: 3 });
+    expect(engine.settings().script_cap).toBe(4);
+    await call("PUT", "/api/settings", { mode: "full", cap: 3, script_cap: 2 });
   });
   it("stop-all and resume toggle the flag", async () => {
     await call("POST", "/api/stop-all");
